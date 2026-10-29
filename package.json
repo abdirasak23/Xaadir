@@ -1,0 +1,42 @@
+{
+  "name": "xaadir-admin",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint src",
+    "hash-password": "node scripts/hash-password.mjs",
+    "setup-admin": "node scripts/setup-admin.mjs"
+  },
+  "dependencies": {
+    "@hugeicons/core-free-icons": "^4.4.0",
+    "@hugeicons/react": "^1.1.10",
+    "@supabase/supabase-js": "^2.49.1",
+    "bcryptjs": "^3.0.3",
+    "jose": "^5.9.6",
+    "leaflet": "^1.9.4",
+    "next": "^15.5.28",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.16",
+    "@types/node": "^22.13.4",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^15.5.28",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3"
+  },
+  "overrides": {
+    "postcss": "^8.5.32"
+  }
+}
