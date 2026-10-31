@@ -12,6 +12,9 @@ type Attendance = { staff_id: string; date: string; status: string };
 const types = ["annual", "sick", "emergency", "unpaid", "maternity", "other"] as const;
 const todayInTimezone = () => localDateInTimezone(new Date(), TIMEZONE);
 
+
+
+
 export function LeaveManager() {
   const [tab, setTab] = useState<"leaves" | "holidays">("leaves");
   const [leaves, setLeaves] = useState<Leave[]>([]), [holidays, setHolidays] = useState<Holiday[]>([]), [branches, setBranches] = useState<Branch[]>([]), [staff, setStaff] = useState<Staff[]>([]);
