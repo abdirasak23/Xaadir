@@ -26,22 +26,23 @@ Deno.serve(async request => {
   const holidayDates = new Set((holidays ?? []).filter(item => item.branch_id === null || item.branch_id === staff.branch_id).map(item => item.date));
   const { data: existing, error: attendanceError } = await supabase.from("attendance").select("date,status").eq("staff_id", staff.id).in("date", dates);
   if (attendanceError) return response({ error: attendanceError.message }, 500);
-  const byDate = new Map((existing ?? []).map(item => [item.date, item.status]));
+  const byDate = new Map<string, string[]>();
+  for (const item of existing ?? []) byDate.set(item.date, [...(byDate.get(item.date) ?? []), item.status]);
   const eligible: string[] = [], skippedReasons: { date: string; reason: string }[] = [];
   for (const date of dates) {
     const dow = new Date(`${date}T00:00:00Z`).getUTCDay();
     if (WEEKEND_DAYS.includes(dow)) { skippedReasons.push({ date, reason: "weekend" }); continue; }
     if (holidayDates.has(date)) { skippedReasons.push({ date, reason: "holiday" }); continue; }
-    const status = byDate.get(date);
-    if (["present", "late", "manual"].includes(status ?? "")) { skippedReasons.push({ date, reason: "real check-in already recorded" }); continue; }
-    if (["leave", "sick"].includes(status ?? "")) { skippedReasons.push({ date, reason: "leave already recorded" }); continue; }
+    const statuses = byDate.get(date) ?? [];
+    if (statuses.some(status => ["present", "late", "manual"].includes(status))) { skippedReasons.push({ date, reason: "real check-in already recorded" }); continue; }
+    if (statuses.some(status => ["leave", "sick"].includes(status))) { skippedReasons.push({ date, reason: "leave already recorded" }); continue; }
     eligible.push(date);
   }
   const { data: leave, error: leaveError } = await supabase.from("leave_requests").insert({ staff_id: staff.id, leave_type: input.leave_type, start_date: input.start_date, end_date: input.end_date, reason: input.reason, created_by: "admin" }).select("id").single();
   if (leaveError) return response({ error: leaveError.message }, 400);
   if (eligible.length) {
-    const rows = eligible.map(date => ({ staff_id: staff.id, branch_id: staff.branch_id, date, status: input.leave_type === "sick" ? "sick" : "leave", source: "leave", late_minutes: 0, note: `${input.leave_type}: ${input.reason}`, created_by: "admin" }));
-    const { error } = await supabase.from("attendance").upsert(rows, { onConflict: "staff_id,date" });
+    const rows = eligible.map(date => ({ staff_id: staff.id, branch_id: staff.branch_id, date, shift_number: 1, status: input.leave_type === "sick" ? "sick" : "leave", source: "leave", late_minutes: 0, note: `${input.leave_type}: ${input.reason}`, created_by: "admin" }));
+    const { error } = await supabase.from("attendance").upsert(rows, { onConflict: "staff_id,date,shift_number" });
     if (error) { await supabase.from("leave_requests").delete().eq("id", leave.id); return response({ error: error.message }, 400); }
   }
   const { error: auditError } = await supabase.from("audit_log").insert({ actor: input.actor, action: "leave.created", target: leave.id });

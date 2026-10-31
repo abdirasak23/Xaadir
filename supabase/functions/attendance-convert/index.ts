@@ -16,13 +16,13 @@ Deno.serve(async request => {
   } else {
     const { data: staff, error } = await supabase.from("staff").select("id,branch_id").eq("id", input.staff_id!).eq("company_id", input.company_id).maybeSingle();
     if (error) return response({ error: error.message }, 500); if (staff) record = { staff_id: staff.id, branch_id: staff.branch_id, date: input.date };
-    const { data: attendance, error: attendanceError } = await supabase.from("attendance").select("id,status").eq("staff_id", input.staff_id!).eq("date", input.date!).maybeSingle();
+    const { data: attendance, error: attendanceError } = await supabase.from("attendance").select("id,status,shift_number").eq("staff_id", input.staff_id!).eq("date", input.date!).order("shift_number").limit(1).maybeSingle();
     if (attendanceError) return response({ error: attendanceError.message }, 500);
     if (attendance) { record = { ...record, ...attendance }; }
   }
   if (!record) return response({ error: "Staff attendance was not found in this company." }, 404);
   if (record.status && record.status !== "absent") return response({ error: "Only an absent or unrecorded workday can be converted." }, 409);
-  const { data, error } = await supabase.from("attendance").upsert({ id: record.id, staff_id: record.staff_id, branch_id: record.branch_id, date: record.date, status: input.new_status, source: "leave", late_minutes: 0, note: `${input.leave_type}: ${input.reason}`, created_by: "admin", check_in_at: null, check_out_at: null }, { onConflict: "staff_id,date" }).select().single();
+  const { data, error } = await supabase.from("attendance").upsert({ id: record.id, staff_id: record.staff_id, branch_id: record.branch_id, date: record.date, shift_number: record.shift_number ?? 1, status: input.new_status, source: "leave", late_minutes: 0, note: `${input.leave_type}: ${input.reason}`, created_by: "admin", check_in_at: null, check_out_at: null }, { onConflict: "staff_id,date,shift_number" }).select().single();
   if (error) return response({ error: error.message }, 400);
   const { error: auditError } = await supabase.from("audit_log").insert({ actor: input.actor, action: "attendance.converted_to_leave", target: data.id }); if (auditError) return response({ error: auditError.message }, 500);
   return response({ ok: true, attendance: data });

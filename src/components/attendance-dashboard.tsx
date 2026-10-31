@@ -7,7 +7,7 @@ import { localDateInTimezone, WEEKEND_DAYS } from "../../shared/attendance-rules
 type Staff = { id: string; full_name: string; staff_code: string; status: string; branch_id: string; annual_leave_days?: number };
 type Holiday = { id: string; date: string; name: string; branch_id: string | null };
 type Attendance = {
-  id: string; staff_id: string; branch_id: string; date: string; check_in_at: string | null; check_out_at: string | null;
+  id: string; staff_id: string; branch_id: string; date: string; shift_number?: number; check_in_at: string | null; check_out_at: string | null;
   status: string; late_minutes: number; source: string; lat: number | null; lng: number | null; distance_m: number | null;
   wifi_bssid: string | null; ip: string | null; device_id: string | null; note: string | null; created_by: string | null; created_at: string;
   staff?: { full_name: string; staff_code: string; branch_id: string; branches?: { name: string } };
@@ -25,10 +25,10 @@ function downloadBlob(blob: Blob, name: string) {
 }
 function excelCell(value: unknown) { return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function downloadExcel(records: Attendance[], staff: Staff[], from: string, to: string) {
-  const headings = ["Date", "Staff name", "Staff code", "Branch", "Check-in", "Check-out", "Status", "Late minutes", "Source", "Notes"];
+  const headings = ["Date", "Staff name", "Staff code", "Branch", "Shift", "Check-in", "Check-out", "Status", "Late minutes", "Source", "Notes"];
   const rows = records.map(record => {
     const person = staff.find(item => item.id === record.staff_id);
-    return [record.date, person?.full_name ?? record.staff_id, person?.staff_code ?? "", record.staff?.branches?.name ?? "", formatTime(record.check_in_at), formatTime(record.check_out_at), record.status, record.late_minutes, record.source, record.note ?? ""];
+    return [record.date, person?.full_name ?? record.staff_id, person?.staff_code ?? "", record.staff?.branches?.name ?? "", record.shift_number ?? 1, formatTime(record.check_in_at), formatTime(record.check_out_at), record.status, record.late_minutes, record.source, record.note ?? ""];
   });
   const table = [headings, ...rows].map((row, index) => `<tr>${row.map(value => `<${index ? "td" : "th"}>${excelCell(value)}</${index ? "td" : "th"}>`).join("")}</tr>`).join("");
   const html = `<html><head><meta charset="utf-8"></head><body><table>${table}</table></body></html>`;
@@ -36,10 +36,10 @@ function downloadExcel(records: Attendance[], staff: Staff[], from: string, to: 
 }
 function downloadPdf(records: Attendance[], staff: Staff[], from: string, to: string) {
   const clean = (value: unknown) => String(value ?? "").normalize("NFKD").replace(/[^\x20-\x7E]/g, "-").replace(/[\\()]/g, "\\$&");
-  const lines = [`XAADIR - ATTENDANCE REPORT`, `Period: ${from} to ${to}`, `Records: ${records.length}`, "", "DATE       STAFF                 CODE        CHECK-IN  CHECK-OUT STATUS       LATE", "--------------------------------------------------------------------------------"];
+  const lines = [`XAADIR - ATTENDANCE REPORT`, `Period: ${from} to ${to}`, `Records: ${records.length}`, "", "DATE       STAFF                 CODE        SHIFT CHECK-IN  CHECK-OUT STATUS       LATE", "--------------------------------------------------------------------------------"];
   for (const record of records) {
     const person = staff.find(item => item.id === record.staff_id);
-    lines.push(`${record.date} ${(person?.full_name ?? "Unknown staff").slice(0, 20).padEnd(20)} ${(person?.staff_code ?? "").slice(0, 10).padEnd(10)} ${formatTime(record.check_in_at).padEnd(9)} ${formatTime(record.check_out_at).padEnd(9)} ${record.status.slice(0, 11).padEnd(11)} ${record.late_minutes ?? 0}m`);
+    lines.push(`${record.date} ${(person?.full_name ?? "Unknown staff").slice(0, 20).padEnd(20)} ${(person?.staff_code ?? "").slice(0, 10).padEnd(10)} S${record.shift_number ?? 1}    ${formatTime(record.check_in_at).padEnd(9)} ${formatTime(record.check_out_at).padEnd(9)} ${record.status.slice(0, 11).padEnd(11)} ${record.late_minutes ?? 0}m`);
   }
   const pages: string[][] = [];
   for (let i = 0; i < lines.length; i += 48) pages.push(lines.slice(i, i + 48));
@@ -109,9 +109,9 @@ export function AttendanceDashboard() {
   const metrics = useMemo(() => {
     const activeStaff = new Set(staff.map(person => person.id));
     const daily = todayRecords.filter(record => activeStaff.has(record.staff_id));
-    const presentToday = daily.filter(record => record.status === "present" || record.status === "manual").length;
-    const lateToday = daily.filter(record => record.status === "late").length;
-    const onLeaveToday = daily.filter(record => record.status === "leave" || record.status === "sick").length;
+    const presentToday = new Set(daily.filter(record => record.status === "present" || record.status === "manual").map(record => record.staff_id)).size;
+    const lateToday = new Set(daily.filter(record => record.status === "late").map(record => record.staff_id)).size;
+    const onLeaveToday = new Set(daily.filter(record => record.status === "leave" || record.status === "sick").map(record => record.staff_id)).size;
     const presentIds = new Set(daily.filter(record => ["present", "late", "manual", "leave", "sick", "holiday"].includes(record.status)).map(record => record.staff_id));
     const absentToday = staff.filter(person => workDates(today, today, person).length > 0 && !presentIds.has(person.id)).length;
     const end = to > today ? today : to;
@@ -121,15 +121,15 @@ export function AttendanceDashboard() {
       const excused = new Set(records.filter(record => record.staff_id === person.id && ["leave", "sick", "holiday"].includes(record.status)).map(record => record.date));
       denominator += Math.max(0, days.length - [...excused].filter(date => days.includes(date)).length);
     }
-    const attended = records.filter(record => activeStaff.has(record.staff_id) && ["present", "late", "manual"].includes(record.status)).length;
+    const attended = new Set(records.filter(record => activeStaff.has(record.staff_id) && ["present", "late", "manual"].includes(record.status)).map(record => `${record.staff_id}:${record.date}`)).size;
     return { presentToday, lateToday, absentToday, onLeaveToday, percentage: denominator ? Math.round(attended / denominator * 100) : null };
   }, [records, todayRecords, staff, from, to, workDates]);
   const summaries = useMemo(() => staff.map(person => {
     const entries = records.filter(record => record.staff_id === person.id);
-    const daysPresent = entries.filter(record => ["present", "late", "manual"].includes(record.status)).length;
-    const daysLate = entries.filter(record => record.status === "late").length;
+    const daysPresent = new Set(entries.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.date)).size;
+    const daysLate = new Set(entries.filter(record => record.status === "late").map(record => record.date)).size;
     const lateMinutes = entries.reduce((sum, record) => sum + (record.late_minutes ?? 0), 0);
-    const daysLeave = entries.filter(record => record.status === "leave").length, daysSick = entries.filter(record => record.status === "sick").length, daysHoliday = entries.filter(record => record.status === "holiday").length;
+    const daysLeave = new Set(entries.filter(record => record.status === "leave").map(record => record.date)).size, daysSick = new Set(entries.filter(record => record.status === "sick").map(record => record.date)).size, daysHoliday = new Set(entries.filter(record => record.status === "holiday").map(record => record.date)).size;
     const calcEnd = to > today ? today : to, working = calcEnd >= from ? workDates(from, calcEnd, person) : [];
     const divisor = Math.max(0, working.length - new Set(entries.filter(record => ["leave", "sick", "holiday"].includes(record.status)).map(record => record.date).filter(date => working.includes(date))).size);
     const presentDates = new Set(entries.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.date));
@@ -154,7 +154,7 @@ export function AttendanceDashboard() {
     if (preset === "yesterday") { setFrom(day(-1)); setTo(day(-1)); }
     if (preset === "week") { setFrom(day(-6)); setTo(day(0)); }
   };
-  const weekBars = Array.from({length:7}, (_, index) => { const d = new Date(`${today}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - (6-index)); const date = d.toISOString().slice(0,10); return { date, label:d.toLocaleDateString(undefined,{weekday:"short",timeZone:"UTC"}), count:records.filter(record=>record.date===date && ["present","late","manual"].includes(record.status)).length }; });
+  const weekBars = Array.from({length:7}, (_, index) => { const d = new Date(`${today}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - (6-index)); const date = d.toISOString().slice(0,10); return { date, label:d.toLocaleDateString(undefined,{weekday:"short",timeZone:"UTC"}), count:new Set(records.filter(record=>record.date===date && ["present","late","manual"].includes(record.status)).map(record=>record.staff_id)).size }; });
 
   return <><PageHeading eyebrow="Workforce insights" title="Attendance" description="Daily visibility into check-ins, punctuality and attendance patterns." action={<a href="/attendance/manual" className="rounded-xl bg-forest px-4 py-2.5 text-sm font-semibold text-white">＋ Manual entry</a>} />
     {error && <div className="mb-4"><Notice error>{error}</Notice></div>}

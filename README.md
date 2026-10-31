@@ -48,6 +48,17 @@ A compact, responsive company HR panel and developer company-registration panel 
 7. Sign in to `/admin-panel/login` with the developer-admin username/password. Register a company and its HR contact. Share the one-time HR login details shown after creation.
 8. The HR contact signs in at `/login` using their email and the temporary password (`Xd` + the last four phone digits), changes the password, then creates the company's branches and staff.
 
+## Deploying the admin login on Render
+
+Render does not read your local `.env.local` file. In the Render service, open **Environment** and add these server-only variables:
+
+- `ADMIN_USERNAME`: the developer-admin username you want to use.
+- `ADMIN_PASSWORD_HASH`: generate a bcrypt hash locally with `npm run hash-password`, then paste the printed hash as the value. Do not use the plain password here.
+- `ADMIN_SESSION_SECRET`: a private random value of at least 32 characters. Generate one locally with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`.
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `EDGE_FUNCTION_SECRET`, and `QR_SIGNING_SECRET` for the app's other features.
+
+Save the environment changes and redeploy the Render service. Never add the admin password or service-role key to a `NEXT_PUBLIC_` variable, commit them, or share them in chat. `npm run setup-admin` creates a local `.env.local`; it does not configure Render.
+
 ## Leave, sick days, and holidays
 
 1. Run [`supabase/leave.sql`](./supabase/leave.sql) in the Supabase SQL Editor after `schema.sql`. It enables RLS on the new tables, grants access only to `service_role`, and adds attendance statuses and the annual leave allowance field.
@@ -57,6 +68,15 @@ A compact, responsive company HR panel and developer company-registration panel 
 5. Check the attendance percentage by hand: for 20 eligible workdays, 3 sick days, and 14 present days, it should be `14 / (20 - 3) = 82%`.
 6. Scan a QR code on a leave day and confirm that the check-in function returns HTTP 403 with `ON_LEAVE`. Cancel the request, then confirm check-in is available again.
 7. Convert a past absent day to sick leave from the attendance detail, and confirm the status and percentage update. Add a holiday and confirm active staff in its scope receive holiday entries, while existing check-ins remain untouched.
+
+## Split shifts and payroll
+
+1. Run [`supabase/payroll.sql`](./supabase/payroll.sql) in the Supabase SQL Editor after `schema.sql` and `leave.sql`. It migrates existing staff to their current single shift, adds salary and schedule fields, changes attendance to one row per staff shift, and sets the lateness grace period to five minutes.
+2. Redeploy the updated `create-staff`, `checkin`, `manual-attendance`, `leave-save`, `holiday-save`, and `attendance-convert` Edge Functions. A staff member can now have up to eight ordered, non-overlapping daily shifts. Each successful QR scan checks out the open shift; the next scan starts the next scheduled shift.
+3. In **Staff**, set the monthly salary and add each daily shift, such as 08:00–12:00 and 15:00–21:00. Existing schedules are migrated automatically as one shift.
+4. Open **Payroll**, select the month and staff member, review the attendance and deduction ledger, then download the individual monthly statement as PDF or Excel. Lateness is recalculated from the actual check-in against the corresponding shift and starts after five minutes.
+
+Payroll uses the configured monthly salary, scheduled workdays (excluding Fridays and applicable branch holidays), the sum of the staff member's shift hours, and unexcused absences on past scheduled workdays. The current day and approved leave are not counted as absences. Salary amounts are displayed without a currency symbol because this workspace does not store a payroll currency setting.
 
 Weekend and date rules are centralized in [`shared/attendance-rules.ts`](./shared/attendance-rules.ts): Friday is the weekend day, and dates are interpreted in `Africa/Mogadishu`.
 

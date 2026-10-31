@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
   });
   if (!parsed.success || parsed.data.from > parsed.data.to) return NextResponse.json({ error: "Invalid attendance filters." }, { status: 400 });
   const { from, to, branch } = parsed.data;
-  let query = supabase.from("attendance").select("*, staff!inner(full_name,staff_code,branch_id,company_id,branches(name))").eq("staff.company_id", company.companyId).gte("date", from).lte("date", to).order("date", { ascending: false });
+  let query = supabase.from("attendance").select("*, staff!inner(full_name,staff_code,branch_id,company_id,branches(name))").eq("staff.company_id", company.companyId).gte("date", from).lte("date", to).order("date", { ascending: false }).order("shift_number", { ascending: false });
   if (branch) query = query.eq("branch_id", branch);
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

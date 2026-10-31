@@ -18,8 +18,15 @@ export async function POST(request: NextRequest) {
   const { username, password } = parsed.data;
   const expectedUsername = process.env.ADMIN_USERNAME ?? "";
   const passwordHash = process.env.ADMIN_PASSWORD_HASH ?? "";
-  if (!expectedUsername || !passwordHash || !/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(passwordHash)) {
-    return NextResponse.json({ error: "Admin login is not configured. Run `npm run setup-admin`, then restart the app." }, { status: 500 });
+  if (!expectedUsername || !passwordHash) {
+    return NextResponse.json({
+      error: "Admin login is not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD_HASH in your hosting environment, then redeploy.",
+    }, { status: 500, headers: { "Cache-Control": "no-store" } });
+  }
+  if (!/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(passwordHash)) {
+    return NextResponse.json({
+      error: "ADMIN_PASSWORD_HASH is invalid. Generate a bcrypt hash with `npm run hash-password`, save the full value starting with $2b$ (or $2a$/$2y$) in Render, then redeploy.",
+    }, { status: 500, headers: { "Cache-Control": "no-store" } });
   }
   let usernameValid = false;
   let passwordValid = false;
@@ -27,7 +34,7 @@ export async function POST(request: NextRequest) {
     usernameValid = constantTimeEqual(username, expectedUsername);
     passwordValid = await bcrypt.compare(password, passwordHash);
   } catch {
-    return NextResponse.json({ error: "Admin login settings are invalid. Run `npm run setup-admin`, then restart the app." }, { status: 500 });
+    return NextResponse.json({ error: "Admin password hash could not be verified. Generate a fresh bcrypt hash and redeploy." }, { status: 500, headers: { "Cache-Control": "no-store" } });
   }
   if (!usernameValid || !passwordValid) {
     return NextResponse.json({ error: "Incorrect username or password." }, { status: 401 });

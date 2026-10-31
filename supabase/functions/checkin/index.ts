@@ -41,7 +41,7 @@ Deno.serve(async (request) => {
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const { data: authData, error: authError } = await supabase.auth.getUser(parsed.data.staff_jwt);
   if (authError || !authData.user) return response({ reason: "INVALID_SESSION", message: "Sign in again before checking in." }, 401);
-  const { data: staff, error: staffError } = await supabase.from("staff").select("id,company_id,branch_id,status,shift_start,grace_minutes").eq("auth_user_id", authData.user.id).maybeSingle();
+  const { data: staff, error: staffError } = await supabase.from("staff").select("id,company_id,branch_id,status,shift_start,shift_end,scheduled_shifts,grace_minutes").eq("auth_user_id", authData.user.id).maybeSingle();
   if (staffError) return response({ reason: "LOOKUP_FAILED", message: staffError.message }, 500);
   if (!staff || staff.status !== "active") return response({ reason: "STAFF_INACTIVE", message: "This staff account is not active." }, 403);
   if (!staff.company_id) return response({ reason: "COMPANY_NOT_CONFIGURED", message: "This staff account is not linked to a company." }, 403);
@@ -64,11 +64,12 @@ Deno.serve(async (request) => {
   }
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
   if (branch.public_ip && ip !== branch.public_ip) return response({ reason: "IP_NOT_ALLOWED", message: "Check-in must use the office public network." }, 403);
-  const { data: existing, error: existingError } = await supabase.from("attendance").select("id,status,note").eq("staff_id", staff.id).eq("date", date).maybeSingle();
+  const { data: existingRows, error: existingError } = await supabase.from("attendance").select("id,status,note,shift_number,check_in_at,check_out_at").eq("staff_id", staff.id).eq("date", date).order("shift_number");
   if (existingError) return response({ reason: "ATTENDANCE_LOOKUP_FAILED", message: existingError.message }, 500);
-  if (existing?.status === "leave" || existing?.status === "sick") return response({ code: "ON_LEAVE", reason: "ON_LEAVE", leave_type: existing.status === "sick" ? "sick" : existing.note?.split(":")[0] ?? "leave", message: "You are recorded as on leave today. Contact HR if this needs to be changed." }, 403);
-  if (existing?.status === "holiday") return response({ code: "ON_HOLIDAY", reason: "ON_HOLIDAY", message: "This date is recorded as a holiday." }, 403);
-  if (existing) return response({ reason: "ALREADY_CHECKED_IN", message: "Attendance is already recorded for today." }, 409);
+  const dayRows = existingRows ?? [];
+  const leave = dayRows.find(row => row.status === "leave" || row.status === "sick");
+  if (leave) return response({ code: "ON_LEAVE", reason: "ON_LEAVE", leave_type: leave.status === "sick" ? "sick" : leave.note?.split(":")[0] ?? "leave", message: "You are recorded as on leave today. Contact HR if this needs to be changed." }, 403);
+  if (dayRows.some(row => row.status === "holiday")) return response({ code: "ON_HOLIDAY", reason: "ON_HOLIDAY", message: "This date is recorded as a holiday." }, 403);
   const { data: device, error: deviceError } = await supabase.from("devices").select("id,approved").eq("staff_id", staff.id).eq("device_id", parsed.data.device_id).maybeSingle();
   if (deviceError) return response({ reason: "DEVICE_CHECK_FAILED", message: deviceError.message }, 500);
   if (!device) {
@@ -76,16 +77,33 @@ Deno.serve(async (request) => {
     if (error) return response({ reason: "DEVICE_BIND_FAILED", message: "Could not bind this device." }, 400);
   } else if (!device.approved) return response({ reason: "DEVICE_NOT_APPROVED", message: "This device has not been approved." }, 403);
   const now = new Date();
-  const [hour, minute] = staff.shift_start.split(":").map(Number);
-  const shift = new Date(`${date}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+03:00`);
-  const lateMinutes = Math.max(0, Math.floor((now.getTime() - shift.getTime()) / 60000) - staff.grace_minutes);
-  const { data, error } = await supabase.from("attendance").insert({
-    staff_id: staff.id, branch_id: branch.id, date, check_in_at: now.toISOString(),
+  const openShift = dayRows.find(row => row.check_in_at && !row.check_out_at && ["present", "late", "manual"].includes(row.status));
+  if (openShift) {
+    const { data, error } = await supabase.from("attendance").update({ check_out_at: now.toISOString() }).eq("id", openShift.id).is("check_out_at", null).select().single();
+    if (error) return response({ reason: "ATTENDANCE_SAVE_FAILED", message: error.message }, 400);
+    return response({ ok: true, action: "check_out", attendance: data });
+  }
+  const shifts = Array.isArray(staff.scheduled_shifts) && staff.scheduled_shifts.length
+    ? staff.scheduled_shifts as { start: string; end: string }[]
+    : [{ start: staff.shift_start.slice(0, 5), end: staff.shift_end.slice(0, 5) }];
+  const nextIndex = shifts.findIndex((_, index) => !dayRows.some(row => row.shift_number === index + 1 && row.status !== "absent"));
+  if (nextIndex < 0) return response({ reason: "ATTENDANCE_COMPLETE", message: "All scheduled shifts are already recorded for today." }, 409);
+  const shiftNumber = nextIndex + 1;
+  const existingAbsence = dayRows.find(row => row.shift_number === shiftNumber && row.status === "absent");
+  const [hour, minute] = shifts[nextIndex].start.split(":").map(Number);
+  const shiftStart = new Date(`${date}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+03:00`);
+  const lateMinutes = Math.max(0, Math.floor((now.getTime() - shiftStart.getTime()) / 60000) - staff.grace_minutes);
+  const entry = {
+    staff_id: staff.id, branch_id: branch.id, date, shift_number: shiftNumber, check_in_at: now.toISOString(), check_out_at: null,
     status: lateMinutes > 0 ? "late" : "present", late_minutes: lateMinutes,
     source: parsed.data.qr_type === "static" ? "qr_static" : "qr_live",
     lat: parsed.data.lat, lng: parsed.data.lng, distance_m: Math.round(distance),
     wifi_bssid: parsed.data.wifi_bssid ?? null, ip, device_id: parsed.data.device_id,
-  }).select().single();
+  };
+  const save = existingAbsence
+    ? supabase.from("attendance").update(entry).eq("id", existingAbsence.id).select().single()
+    : supabase.from("attendance").insert(entry).select().single();
+  const { data, error } = await save;
   if (error) {
     if (error.code === "23505") return response({ reason: "ALREADY_CHECKED_IN", message: "Attendance is already recorded for today." }, 409);
     return response({ reason: "ATTENDANCE_SAVE_FAILED", message: error.message }, 400);

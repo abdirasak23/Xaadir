@@ -7,6 +7,8 @@ const inputSchema = z.object({
   email: z.string().email().max(254), phone: z.string().trim().min(6).max(30),
   job_title: z.string().trim().min(1).max(100), branch_id: z.string().uuid(), company_id: z.string().uuid(),
   shift_start: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/), shift_end: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+  scheduled_shifts: z.array(z.object({ start: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/), end: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/) })).min(1).max(8).optional(),
+  monthly_salary: z.number().min(0).max(1000000000).default(0),
   annual_leave_days: z.number().int().min(0).max(365).default(21),
 });
 
@@ -50,7 +52,7 @@ Deno.serve(async (request) => {
     if (userError || !userData.user) throw new Error(userError?.message ?? "Could not create auth account.");
     createdUserId = userData.user.id;
     const { data: staff, error: staffError } = await supabase.from("staff").insert({
-      ...parsed.data, auth_user_id: createdUserId, must_change_password: true, grace_minutes: 10,
+      ...parsed.data, auth_user_id: createdUserId, must_change_password: true, grace_minutes: 5,
     }).select().single();
     if (staffError) throw new Error(staffError.message);
     createdStaffId = staff.id;

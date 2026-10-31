@@ -19,9 +19,9 @@ Deno.serve(async request => {
     const { data: existing, error } = await supabase.from("attendance").select("staff_id,status").eq("date", input.date).in("staff_id", staffIds);
     if (error) { await supabase.from("holidays").delete().eq("id", holiday.id); return response({ error: error.message }, 500); }
     const real = new Set((existing ?? []).filter(row => ["present","late","manual"].includes(row.status)).map(row => row.staff_id));
-    const rows = (staff ?? []).filter(person => !real.has(person.id)).map(person => ({ staff_id: person.id, branch_id: person.branch_id, date: input.date, status: "holiday", source: "holiday", note: input.name, created_by: "admin" }));
+    const rows = (staff ?? []).filter(person => !real.has(person.id)).map(person => ({ staff_id: person.id, branch_id: person.branch_id, date: input.date, shift_number: 1, status: "holiday", source: "holiday", note: input.name, created_by: "admin" }));
     skipped = (staff?.length ?? 0) - rows.length;
-    if (rows.length) { const { error: upsertError } = await supabase.from("attendance").upsert(rows, { onConflict: "staff_id,date" }); if (upsertError) { await supabase.from("holidays").delete().eq("id", holiday.id); return response({ error: upsertError.message }, 400); } created = rows.length; }
+    if (rows.length) { const { error: upsertError } = await supabase.from("attendance").upsert(rows, { onConflict: "staff_id,date,shift_number" }); if (upsertError) { await supabase.from("holidays").delete().eq("id", holiday.id); return response({ error: upsertError.message }, 400); } created = rows.length; }
   }
   const { error: auditError } = await supabase.from("audit_log").insert({ actor: input.actor, action: "holiday.created", target: holiday.id }); if (auditError) return response({ error: auditError.message }, 500);
   return response({ ok: true, holiday_id: holiday.id, days_created: created, days_skipped: skipped });

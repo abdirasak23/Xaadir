@@ -6,11 +6,12 @@ import xaadirLogo from "../../public/images/xaadirlogo.png";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { UserGroupIcon, Calendar03Icon, Edit01Icon, QrCode01Icon, Settings02Icon, Logout01Icon, Menu01Icon, ArrowUpRight01Icon } from "@hugeicons/core-free-icons";
+import { UserGroupIcon, Calendar03Icon, Edit01Icon, QrCode01Icon, Settings02Icon, Logout01Icon, Menu01Icon, ArrowUpRight01Icon, Money01Icon } from "@hugeicons/core-free-icons";
 
 const links = [
   { href: "/staff", label: "Staff", icon: UserGroupIcon },
   { href: "/attendance", label: "Attendance", icon: Calendar03Icon },
+  { href: "/payroll", label: "Payroll", icon: Money01Icon },
   { href: "/leave", label: "Leave", icon: Calendar03Icon },
   { href: "/attendance/manual", label: "Manual entry", icon: Edit01Icon },
   { href: "/qr-codes", label: "QR codes", icon: QrCode01Icon },
