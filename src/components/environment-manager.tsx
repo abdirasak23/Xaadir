@@ -66,6 +66,7 @@ export function EnvironmentManager() {
     const normalized = bssid.trim().toUpperCase();
     if (!ssid.trim() || !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(normalized)) { setError("Enter an SSID and a valid BSSID (AA:BB:CC:DD:EE:FF)."); return; }
     if (wifi.some(item => item.bssid.toLowerCase() === normalized.toLowerCase())) { setError("That BSSID is already registered."); return; }
+    if (wifi.length >= 50) { setError("A branch can have up to 50 Wi-Fi networks."); return; }
     setWifi([...wifi, { ssid: ssid.trim(), bssid: normalized }]); setSsid(""); setBssid(""); setError("");
   }
 
@@ -82,8 +83,24 @@ export function EnvironmentManager() {
           <div><div className="mb-3 flex items-center justify-between"><div><span className="text-sm font-semibold text-neutral-800">Office location</span><p className="mt-0.5 text-xs text-neutral-500">Place the pin or enter the coordinates.</p></div><span className="rounded-lg bg-neutral-100 px-2.5 py-1.5 text-[10px] font-medium text-neutral-600">{lat.toFixed(5)}, {lng.toFixed(5)}</span></div><MapPicker lat={lat} lng={lng} onChange={(newLat, newLng) => { setLat(newLat); setLng(newLng); }} /><div className="mt-3 grid grid-cols-2 gap-3"><Field label="Latitude"><Input type="number" step="any" value={lat} onChange={event => setLat(Number(event.target.value))} /></Field><Field label="Longitude"><Input type="number" step="any" value={lng} onChange={event => setLng(Number(event.target.value))} /></Field></div></div>
           <Field label={`Allowed check-in radius · ${radius}m`}><input aria-label="Allowed check-in radius" type="range" min="25" max="2000" step="25" value={radius} onChange={event => setRadius(Number(event.target.value))} className="w-full accent-forest" /></Field>
           <div className="grid gap-6 md:grid-cols-2"><Field label="Office public IP (optional)"><Input placeholder="203.0.113.10" value={publicIp} onChange={event => setPublicIp(event.target.value)} /></Field>
-            <div><p className="mb-2 text-xs font-semibold text-slate-600">Allowed Wi-Fi networks</p><div className="flex gap-2"><Input placeholder="SSID" value={ssid} onChange={event => setSsid(event.target.value)} /><Input placeholder="AA:BB:CC:DD:EE:FF" value={bssid} onChange={event => setBssid(event.target.value)} /></div><Button type="button" className="mt-2 w-full bg-slate-100 text-slate-700 hover:bg-slate-200" onClick={addWifi}>Add network</Button>
-              <div className="mt-3 space-y-2">{wifi.map((network, index) => <div key={`${network.bssid}-${index}`} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs"><span><b>{network.ssid}</b><span className="ml-2 text-slate-400">{network.bssid}</span></span><button type="button" onClick={() => setWifi(wifi.filter((_, itemIndex) => itemIndex !== index))} className="text-rose-600">Remove</button></div>)}</div></div>
+            <section aria-labelledby="wifi-networks-heading" className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div><h3 id="wifi-networks-heading" className="text-sm font-semibold text-neutral-900">Allowed Wi-Fi networks</h3><p className="mt-1 text-xs leading-5 text-slate-500">Add every office access point. Each network is matched by its BSSID.</p></div>
+                <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{wifi.length}/50</span>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <Field label="Network name (SSID)"><Input placeholder="e.g. Xaadir Office" value={ssid} onChange={event => setSsid(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addWifi(); } }} /></Field>
+                <Field label="Access point BSSID"><Input placeholder="AA:BB:CC:DD:EE:FF" value={bssid} onChange={event => setBssid(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addWifi(); } }} /></Field>
+              </div>
+              <Button type="button" disabled={wifi.length >= 50} className="mt-3 w-full bg-neutral-900 text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50" onClick={addWifi}>Add Wi-Fi network</Button>
+              <div className="mt-4 space-y-2">
+                {wifi.length ? wifi.map((network, index) => <div key={`${network.bssid}-${index}`} className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+                  <div className="min-w-0"><p className="truncate text-sm font-medium text-slate-800">{network.ssid}</p><p className="mt-0.5 font-mono text-[11px] text-slate-500">{network.bssid}</p></div>
+                  <button type="button" aria-label={`Remove ${network.ssid}`} onClick={() => { setWifi(wifi.filter((_, itemIndex) => itemIndex !== index)); setError(""); }} className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-rose-600 transition hover:bg-rose-50">Remove</button>
+                </div>) : <p className="rounded-xl border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-500">No Wi-Fi networks added yet. You can add more than one access point.</p>}
+              </div>
+              <p className="mt-3 text-[11px] leading-5 text-slate-500">Your changes take effect when you select <strong>Save environment</strong>.</p>
+            </section>
           </div>
           <p className="rounded-xl bg-emerald-50 px-4 py-3 text-xs text-emerald-800">BSSID can also be registered from the Flutter app later.</p>
           <Button disabled={busy}>{busy ? "Saving..." : "Save environment"}</Button>

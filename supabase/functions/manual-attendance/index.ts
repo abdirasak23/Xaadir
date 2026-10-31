@@ -23,12 +23,12 @@ Deno.serve(async (request) => {
   const { data: staff, error: staffError } = await supabase.from("staff").select("id,company_id,branch_id,shift_start,grace_minutes,status").eq("id", parsed.data.staff_id).eq("company_id", parsed.data.company_id).maybeSingle();
   if (staffError) return response({ error: staffError.message }, 500);
   if (!staff || staff.status !== "active") return response({ error: "Active staff member not found." }, 404);
-  const checkIn = parsed.data.check_in_at ? new Date(`${parsed.data.date}T${parsed.data.check_in_at}:00Z`) : null;
-  const checkOut = parsed.data.check_out_at ? new Date(`${parsed.data.date}T${parsed.data.check_out_at}:00Z`) : null;
+  const checkIn = parsed.data.check_in_at ? new Date(`${parsed.data.date}T${parsed.data.check_in_at}:00+03:00`) : null;
+  const checkOut = parsed.data.check_out_at ? new Date(`${parsed.data.date}T${parsed.data.check_out_at}:00+03:00`) : null;
   if (!checkIn && checkOut) return response({ error: "Check-in time is required when check-out is provided." }, 400);
   if (checkIn && checkOut && checkOut < checkIn) return response({ error: "Check-out must be after check-in." }, 400);
   const [shiftHour, shiftMinute] = staff.shift_start.split(":").map(Number);
-  const shift = new Date(`${parsed.data.date}T${String(shiftHour).padStart(2, "0")}:${String(shiftMinute).padStart(2, "0")}:00Z`);
+  const shift = new Date(`${parsed.data.date}T${String(shiftHour).padStart(2, "0")}:${String(shiftMinute).padStart(2, "0")}:00+03:00`);
   const lateMinutes = checkIn ? Math.max(0, Math.floor((checkIn.getTime() - shift.getTime()) / 60000) - staff.grace_minutes) : 0;
   const record = {
     staff_id: staff.id, branch_id: staff.branch_id, date: parsed.data.date,

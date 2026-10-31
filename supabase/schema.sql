@@ -59,6 +59,7 @@ create table if not exists public.staff (
   invite_code text unique,
   invite_status text not null default 'none' check (invite_status in ('none', 'sent', 'accepted')),
   invite_expires_at timestamptz,
+  annual_leave_days integer not null default 21 check (annual_leave_days >= 0 and annual_leave_days <= 365),
   created_at timestamptz not null default now()
 );
 

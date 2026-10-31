@@ -2,7 +2,9 @@
 
 import { FormEvent, Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Image from "next/image";
 import { Button, Input, Notice } from "@/components/ui";
+import xaadirLogo from "../../../public/images/xaadirlogo.png";
 
 function CompanyLoginForm() {
   const router = useRouter();
@@ -36,13 +38,13 @@ function CompanyLoginForm() {
 
   return <main className="grid min-h-screen bg-white md:grid-cols-[1fr_1fr]">
     <section className="hidden flex-col justify-between bg-forest p-12 text-white md:flex">
-      <div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-xl bg-white/15 text-xl font-bold">X</span><span className="text-xl font-bold">xaadir</span></div>
+      <div className="flex h-[76px] w-[270px] items-center rounded-2xl bg-white px-5 shadow-sm"><Image src={xaadirLogo} alt="Xaadir" priority className="block h-auto w-full object-contain" /></div>
       <div className="max-w-lg"><p className="mb-4 text-xs font-bold uppercase tracking-[.22em] text-emerald-100">People, in sync</p><h1 className="text-5xl font-bold leading-tight tracking-tight">A clearer view of your team.</h1><p className="mt-5 text-lg leading-8 text-emerald-50/80">Simple staff administration and attendance, all in one calm workspace.</p></div>
       <p className="text-sm text-emerald-50/60">XAADIR · COMPANY WORKSPACE</p>
     </section>
     <section className="flex items-center justify-center px-6 py-12">
       <form onSubmit={submit} className="w-full max-w-sm space-y-6">
-        <div className="md:hidden"><span className="text-xl font-bold text-forest">xaadir</span></div>
+        <div className="mb-2 inline-flex h-[68px] w-[230px] items-center rounded-2xl border border-neutral-100 bg-white px-4 shadow-sm md:hidden"><Image src={xaadirLogo} alt="Xaadir" priority className="block h-auto w-full object-contain" /></div>
         <div><p className="text-sm font-semibold text-forest">Welcome back</p><h2 className="mt-2 text-3xl font-bold tracking-tight">Company sign in</h2><p className="mt-2 text-sm text-slate-500">Sign in with the company HR email and password.</p></div>
         {error && <Notice error>{error}</Notice>}
         <label className="block space-y-2"><span className="text-sm font-semibold">Work email</span><Input autoComplete="username" name="email" type="email" required /></label>

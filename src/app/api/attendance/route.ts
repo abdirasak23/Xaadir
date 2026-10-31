@@ -3,12 +3,13 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { dateSchema, uuidSchema } from "@/lib/validation";
 import { z } from "zod";
 import { getCompanyContext } from "@/lib/company-auth";
+import { localDateInTimezone } from "../../../../shared/attendance-rules";
 
 export async function GET(request: NextRequest) {
   const company = await getCompanyContext();
   if (!company) return NextResponse.json({ error: "Company login required." }, { status: 401 });
   const supabase = getSupabaseAdmin();
-  const fallbackDate = new Date().toISOString().slice(0, 10);
+  const fallbackDate = localDateInTimezone();
   const parsed = z.object({
     from: dateSchema.default(fallbackDate),
     to: dateSchema.default(fallbackDate),
@@ -31,7 +32,14 @@ export async function POST(request: Request) {
   const company = await getCompanyContext();
   if (!company) return NextResponse.json({ error: "Company login required." }, { status: 401 });
   const { manualAttendanceSchema } = await import("@/lib/validation");
-  const parsed = manualAttendanceSchema.safeParse(await request.json().catch(() => null));
+  const body = await request.json().catch(() => null);
+  const convertSchema = z.object({ action: z.literal("convert"), attendance_id: uuidSchema.optional(), staff_id: uuidSchema.optional(), date: dateSchema.optional(), new_status: z.enum(["leave", "sick"]), leave_type: z.enum(["annual", "sick", "emergency", "unpaid", "maternity", "other"]), reason: z.string().trim().min(1).max(1000) });
+  const convert = convertSchema.safeParse(body);
+  if (convert.success) {
+    try { return NextResponse.json(await (await import("@/lib/edge")).callAdminFunction("attendance-convert", { ...convert.data, company_id: company.companyId, actor: company.userId })); }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Attendance conversion failed." }, { status: 400 }); }
+  }
+  const parsed = manualAttendanceSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid attendance details." }, { status: 400 });
   try {
     const result = await (await import("@/lib/edge")).callAdminFunction("manual-attendance", {

@@ -2,6 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { z } from "npm:zod";
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
+const TIMEZONE = "Africa/Mogadishu";
 const schema = z.object({
   staff_jwt: z.string().min(20), qr_type: z.enum(["static", "live"]), token: z.string().min(8),
   lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180),
@@ -52,7 +53,8 @@ Deno.serve(async (request) => {
   if (!branch) return response({ reason: "BRANCH_NOT_FOUND", message: "Assigned branch was not found." }, 404);
   if (parsed.data.qr_type === "static" && parsed.data.token !== branch.static_qr_secret) return response({ reason: "INVALID_QR", message: "This QR code is not valid for your branch." }, 401);
   if (parsed.data.qr_type === "live" && !await validateLiveToken(parsed.data.token, branch.id)) return response({ reason: "EXPIRED_QR", message: "Live QR code expired. Scan the current code." }, 401);
-  const date = new Date().toISOString().slice(0, 10);
+  const dateParts = new Intl.DateTimeFormat("en-CA", { timeZone: TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const date = `${dateParts.find(item => item.type === "year")?.value}-${dateParts.find(item => item.type === "month")?.value}-${dateParts.find(item => item.type === "day")?.value}`;
   const distance = distanceMeters(parsed.data.lat, parsed.data.lng, branch.lat, branch.lng);
   if (distance > branch.radius_m) return response({ reason: "OUTSIDE_GEOFENCE", message: `You are outside the allowed ${branch.radius_m}m check-in area.` }, 403);
   const { data: allowedWifi, error: wifiError } = await supabase.from("branch_wifi").select("bssid").eq("branch_id", branch.id);
@@ -62,8 +64,10 @@ Deno.serve(async (request) => {
   }
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
   if (branch.public_ip && ip !== branch.public_ip) return response({ reason: "IP_NOT_ALLOWED", message: "Check-in must use the office public network." }, 403);
-  const { data: existing, error: existingError } = await supabase.from("attendance").select("id").eq("staff_id", staff.id).eq("date", date).maybeSingle();
+  const { data: existing, error: existingError } = await supabase.from("attendance").select("id,status,note").eq("staff_id", staff.id).eq("date", date).maybeSingle();
   if (existingError) return response({ reason: "ATTENDANCE_LOOKUP_FAILED", message: existingError.message }, 500);
+  if (existing?.status === "leave" || existing?.status === "sick") return response({ code: "ON_LEAVE", reason: "ON_LEAVE", leave_type: existing.status === "sick" ? "sick" : existing.note?.split(":")[0] ?? "leave", message: "You are recorded as on leave today. Contact HR if this needs to be changed." }, 403);
+  if (existing?.status === "holiday") return response({ code: "ON_HOLIDAY", reason: "ON_HOLIDAY", message: "This date is recorded as a holiday." }, 403);
   if (existing) return response({ reason: "ALREADY_CHECKED_IN", message: "Attendance is already recorded for today." }, 409);
   const { data: device, error: deviceError } = await supabase.from("devices").select("id,approved").eq("staff_id", staff.id).eq("device_id", parsed.data.device_id).maybeSingle();
   if (deviceError) return response({ reason: "DEVICE_CHECK_FAILED", message: deviceError.message }, 500);
@@ -73,7 +77,7 @@ Deno.serve(async (request) => {
   } else if (!device.approved) return response({ reason: "DEVICE_NOT_APPROVED", message: "This device has not been approved." }, 403);
   const now = new Date();
   const [hour, minute] = staff.shift_start.split(":").map(Number);
-  const shift = new Date(`${date}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00Z`);
+  const shift = new Date(`${date}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+03:00`);
   const lateMinutes = Math.max(0, Math.floor((now.getTime() - shift.getTime()) / 60000) - staff.grace_minutes);
   const { data, error } = await supabase.from("attendance").insert({
     staff_id: staff.id, branch_id: branch.id, date, check_in_at: now.toISOString(),

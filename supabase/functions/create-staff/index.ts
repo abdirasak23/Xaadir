@@ -7,6 +7,7 @@ const inputSchema = z.object({
   email: z.string().email().max(254), phone: z.string().trim().min(6).max(30),
   job_title: z.string().trim().min(1).max(100), branch_id: z.string().uuid(), company_id: z.string().uuid(),
   shift_start: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/), shift_end: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+  annual_leave_days: z.number().int().min(0).max(365).default(21),
 });
 
 function response(body: unknown, status = 200) {

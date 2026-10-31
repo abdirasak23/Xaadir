@@ -2,7 +2,9 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { Button, Card, Field, Input, Notice } from "@/components/ui";
+import xaadirLogo from "../../public/images/xaadirlogo.png";
 
 export function AdminPanelLogin() {
   const router = useRouter();
@@ -31,7 +33,7 @@ export function AdminPanelLogin() {
 
   return <main className="grid min-h-screen place-items-center bg-canvas p-5">
     <Card className="w-full max-w-md">
-      <div className="mb-7 flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-950 font-bold text-white">X</span><div><p className="font-bold">Xaadir</p><p className="text-xs text-slate-500">Developer control panel</p></div></div>
+      <div className="mb-7 flex items-center gap-3"><span className="inline-flex h-16 w-[205px] items-center rounded-xl border border-neutral-100 bg-white px-4"><Image src={xaadirLogo} alt="Xaadir" priority className="block h-auto w-full object-contain" /></span><div><p className="text-xs text-slate-500">Developer control panel</p></div></div>
       <p className="text-xs font-bold uppercase tracking-widest text-forest">God mode</p>
       <h1 className="mt-2 text-2xl font-bold">Admin sign in</h1>
       <p className="mt-2 text-sm text-slate-500">Register and provision company workspaces.</p>

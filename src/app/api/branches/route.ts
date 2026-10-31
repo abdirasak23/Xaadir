@@ -16,7 +16,7 @@ export async function GET() {
   }));
   const failed = withWifi.find(item => "error" in item);
   if (failed && "error" in failed) return NextResponse.json({ error: failed.error }, { status: 500 });
-  return NextResponse.json(withWifi, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json(withWifi.map(branch => ({ ...branch, company_name: company.companyName })), { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request) {

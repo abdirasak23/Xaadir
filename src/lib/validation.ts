@@ -27,6 +27,7 @@ export const staffSchema = z.object({
   branch_id: uuidSchema,
   shift_start: timeSchema,
   shift_end: timeSchema,
+  annual_leave_days: z.number().int().min(0).max(365).default(21),
 });
 export const manualAttendanceSchema = z.object({
   staff_id: uuidSchema,

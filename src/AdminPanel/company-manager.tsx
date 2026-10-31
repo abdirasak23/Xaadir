@@ -3,6 +3,9 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Card, Field, Input, Loading, Notice, PageHeading } from "@/components/ui";
+import { DeviceManager } from "@/AdminPanel/device-manager";
+
+type AdminView = "companies" | "devices" | "suspicious";
 
 type Company = {
   id: string;
@@ -15,6 +18,7 @@ type Credentials = { company: string; fullName: string; email: string; phone: st
 
 export function CompanyManager() {
   const router = useRouter();
+  const [view, setView] = useState<AdminView>("companies");
   const [companies, setCompanies] = useState<Company[]>([]);
   const [form, setForm] = useState({ company_name: "", full_name: "", email: "", phone: "" });
   const [credentials, setCredentials] = useState<Credentials | null>(null);
@@ -88,7 +92,8 @@ export function CompanyManager() {
       <div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-950 font-bold text-white">X</span><div><p className="font-bold">Xaadir control</p><p className="text-[11px] text-slate-500">Developer admin</p></div></div>
       <button onClick={() => void signOut()} className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">Log out</button>
     </header>
-    <div className="mx-auto max-w-6xl px-5 py-8 md:px-10 md:py-12">
+    <div className="mx-auto max-w-6xl px-5 pt-6 md:px-10"><div role="tablist" aria-label="Admin panel sections" className="inline-flex max-w-full flex-wrap gap-1 rounded-xl bg-neutral-100 p-1">{([["companies","Companies"],["devices","Staff Devices"],["suspicious","Suspicious activity"]] as const).map(([key,label])=><button key={key} type="button" role="tab" aria-selected={view===key} onClick={()=>setView(key)} className={`rounded-lg px-3 py-2 text-xs font-medium transition sm:px-4 ${view===key?"bg-white text-black shadow-sm":"text-neutral-500 hover:text-black"}`}>{label}</button>)}</div></div>
+    {view === "companies" ? <div className="mx-auto max-w-6xl px-5 py-8 md:px-10 md:py-12">
       <PageHeading eyebrow="Platform administration" title="Companies" description="Create company workspaces and issue the first HR login. Company HR teams manage their own branches and staff." action={<span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-forest">{companies.length} companies</span>} />
       {error && <div className="mb-5"><Notice error>{error}</Notice></div>}
       {credentials && <div className="mb-6"><Card className="border-emerald-200 bg-emerald-50/50">
@@ -112,6 +117,6 @@ export function CompanyManager() {
             <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400"><tr><th className="px-4 py-3">Company</th><th className="px-4 py-3">HR contact</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Created</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map(company => { const admin = company.company_admins?.[0]; return <tr key={company.id}><td className="px-4 py-4 font-semibold">{company.name}</td><td className="px-4 py-4"><p>{admin?.full_name ?? "—"}</p><p className="text-xs text-slate-400">{admin?.email}</p></td><td className="px-4 py-4"><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-forest">{company.status}</span></td><td className="px-4 py-4 text-xs text-slate-500">{new Date(company.created_at).toLocaleDateString()}</td></tr>; })}</tbody></table></div>}
         </Card>
       </div>
-    </div>
+    </div> : <DeviceManager view={view} />}
   </main>;
 }

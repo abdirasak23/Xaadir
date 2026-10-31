@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import xaadirLogo from "../../public/images/xaadirlogo.png";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -10,6 +11,7 @@ import { UserGroupIcon, Calendar03Icon, Edit01Icon, QrCode01Icon, Settings02Icon
 const links = [
   { href: "/staff", label: "Staff", icon: UserGroupIcon },
   { href: "/attendance", label: "Attendance", icon: Calendar03Icon },
+  { href: "/leave", label: "Leave", icon: Calendar03Icon },
   { href: "/attendance/manual", label: "Manual entry", icon: Edit01Icon },
   { href: "/qr-codes", label: "QR codes", icon: QrCode01Icon },
   { href: "/environment", label: "Environment", icon: Settings02Icon },
@@ -25,7 +27,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     <aside className={`fixed inset-y-0 left-0 z-40 flex w-[264px] flex-col border-r border-black/[.06] bg-white px-4 py-5 transition-transform md:sticky md:top-0 md:h-screen md:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
       <Link href="/staff" className="mb-8 flex h-16 items-center justify-start border-b border-black/[.06] px-3 pb-5" onClick={() => setOpen(false)} aria-label="Xaadir home">
         <span className="flex h-12 w-full items-center rounded-xl bg-white px-1">
-          <Image src="/images/xaadirlogo.png" alt="Xaadir" width={190} height={48} priority unoptimized className="block h-auto max-h-12 w-[190px] object-contain object-left" />
+          <Image src={xaadirLogo} alt="Xaadir" priority className="block h-auto max-h-12 w-[190px] object-contain object-left" />
         </span>
       </Link>
       <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.16em] text-neutral-400">Workspace</div>

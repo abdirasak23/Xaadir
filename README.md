@@ -1,6 +1,6 @@
 # Xaadir Admin
 
-A compact, responsive company HR panel and developer company-registration panel built with Next.js App Router, TypeScript, Tailwind CSS, Supabase and standalone Supabase Edge Functions. The HR scope covers staff, branch setup, QR check-in and attendance; payroll and leave are not included.
+A compact, responsive company HR panel and developer company-registration panel built with Next.js App Router, TypeScript, Tailwind CSS, Supabase and standalone Supabase Edge Functions. The HR scope covers staff, branch setup, QR check-in, attendance, leave, sick days, and holidays.
 
 ## Requirements
 
@@ -47,6 +47,18 @@ A compact, responsive company HR panel and developer company-registration panel 
    Open `http://localhost:3000`. The admin cookie is `Secure` in production and works over local HTTP for development.
 7. Sign in to `/admin-panel/login` with the developer-admin username/password. Register a company and its HR contact. Share the one-time HR login details shown after creation.
 8. The HR contact signs in at `/login` using their email and the temporary password (`Xd` + the last four phone digits), changes the password, then creates the company's branches and staff.
+
+## Leave, sick days, and holidays
+
+1. Run [`supabase/leave.sql`](./supabase/leave.sql) in the Supabase SQL Editor after `schema.sql`. It enables RLS on the new tables, grants access only to `service_role`, and adds attendance statuses and the annual leave allowance field.
+2. Deploy or paste these five standalone functions from the Supabase Dashboard: `leave-save`, `leave-cancel`, `holiday-save`, `holiday-delete`, and `attendance-convert`. Redeploy/paste the updated `checkin` function so it enforces leave and holiday blocks. Set `EDGE_FUNCTION_SECRET` on the Supabase project to the same value used by the Next.js server. The admin functions verify `x-admin-secret` and use the service role only on the server.
+3. Open **Leave** in the HR sidebar. Add company-wide or branch holidays, including the confirmed dates for Eid, 26 June, and 1 July for the relevant year. The quick-add field accepts one `YYYY-MM-DD, Name` entry per line.
+4. To verify leave entry, add three weekdays of sick leave for a test staff member. Confirm that sick attendance entries appear and Friday is skipped.
+5. Check the attendance percentage by hand: for 20 eligible workdays, 3 sick days, and 14 present days, it should be `14 / (20 - 3) = 82%`.
+6. Scan a QR code on a leave day and confirm that the check-in function returns HTTP 403 with `ON_LEAVE`. Cancel the request, then confirm check-in is available again.
+7. Convert a past absent day to sick leave from the attendance detail, and confirm the status and percentage update. Add a holiday and confirm active staff in its scope receive holiday entries, while existing check-ins remain untouched.
+
+Weekend and date rules are centralized in [`shared/attendance-rules.ts`](./shared/attendance-rules.ts): Friday is the weekend day, and dates are interpreted in `Africa/Mogadishu`.
 
 ## Security notes
 
