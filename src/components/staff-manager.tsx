@@ -3,14 +3,66 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Card, Field, Input, Loading, Notice, PageHeading } from "@/components/ui";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Cancel01Icon, SmartphoneIcon, RefreshIcon } from "@hugeicons/core-free-icons";
 
 type Branch = { id: string; name: string };
 type Shift = { start: string; end: string };
 type Staff = { id: string; full_name: string; staff_code: string; phone: string; email: string; job_title: string; branch_id: string; shift_start: string; shift_end: string; scheduled_shifts?: Shift[]; monthly_salary?: number; annual_leave_days: number; status: string; invite_status: string; branches?: { name: string } };
 type LeaveRecord = { id: string; staff_id: string; leave_type: string; start_date: string; end_date: string; status: string; reason: string };
 type HolidayRecord = { date: string; branch_id: string | null };
+type StaffDeviceRequest = { id: string; device_name: string | null; status: "pending" | "approved" | "rejected"; requested_at: string; staff: { id: string; full_name: string; staff_code: string; branch_id: string; branches: { name: string } | null } };
 const emptyForm = { full_name: "", staff_code: "", email: "", phone: "", job_title: "", branch_id: "", shift_start: "09:00", shift_end: "17:00", scheduled_shifts: [{ start: "09:00", end: "17:00" }], monthly_salary: 0, annual_leave_days: 21 };
+
+function StaffDeviceApprovals() {
+  const [requests, setRequests] = useState<StaffDeviceRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const load = useCallback(async (refresh = false) => {
+    if (refresh) setRefreshing(true); else setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/staff-devices", { cache: "no-store" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Could not load devices.");
+      setRequests(Array.isArray(body.requests) ? body.requests : []);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not load devices.");
+    } finally { setLoading(false); setRefreshing(false); }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function approve(device: StaffDeviceRequest) {
+    if (!window.confirm(`Approve ${device.device_name || "this phone"} for ${device.staff.full_name}? This phone will be allowed to check in for this staff account.`)) return;
+    setBusyId(device.id); setError(""); setNotice("");
+    try {
+      const response = await fetch("/api/staff-devices", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "approve", request_id: device.id }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Could not approve this phone.");
+      setNotice(`${device.device_name || "Phone"} approved for ${device.staff.full_name}. They can now tap Check again in the app.`);
+      await load(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not approve this phone.");
+    } finally { setBusyId(null); }
+  }
+
+  const pending = requests.filter(request => request.status === "pending");
+  return <section className="space-y-4">
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Device approvals</h2><p className="mt-1 text-xs text-neutral-500">Review phones that need permission to check in.</p></div><button onClick={() => void load(true)} disabled={refreshing || loading} className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 text-xs font-medium hover:bg-neutral-50 disabled:opacity-50"><HugeiconsIcon icon={RefreshIcon} size={15} />{refreshing ? "Refreshing..." : "Refresh"}</button></div>
+    {error && <Notice error>{error}</Notice>}{notice && <Notice>{notice}</Notice>}
+    {loading ? <Card><Loading text="Loading device requests..." /></Card> : requests.length === 0 ? <Card><div className="py-12 text-center"><HugeiconsIcon icon={SmartphoneIcon} size={28} className="mx-auto text-neutral-300" /><p className="mt-3 text-sm font-medium">No device requests</p><p className="mt-1 text-xs text-neutral-500">Requests appear here when staff ask to use a new phone.</p></div></Card> : <>
+      <div className="grid gap-3 sm:grid-cols-3"><Card><p className="text-xs text-neutral-500">Awaiting approval</p><p className="mt-2 text-2xl font-semibold">{pending.length}</p></Card><Card><p className="text-xs text-neutral-500">Approved requests</p><p className="mt-2 text-2xl font-semibold">{requests.filter(request => request.status === "approved").length}</p></Card><Card><p className="text-xs text-neutral-500">Total requests</p><p className="mt-2 text-2xl font-semibold">{requests.length}</p></Card></div>
+      <div className="grid gap-3 lg:grid-cols-2">{requests.map(device => <Card key={device.id} className="border-neutral-100 p-4 sm:p-5"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-neutral-100"><HugeiconsIcon icon={SmartphoneIcon} size={19} /></span><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold">{device.device_name || "Phone"}</h3><p className="mt-1 text-xs text-neutral-600">{device.staff.full_name} · {device.staff.staff_code}</p><p className="mt-1 text-[11px] text-neutral-400">{device.staff.branches?.name || "Branch not set"} · Requested {new Date(device.requested_at).toLocaleString()}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium ${device.status === "approved" ? "bg-emerald-50 text-emerald-700" : device.status === "rejected" ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"}`}>{device.status === "approved" ? "Approved" : device.status === "rejected" ? "Rejected" : "Pending"}</span></div>{device.status === "pending" && <div className="mt-4 flex justify-end border-t border-neutral-100 pt-3"><button onClick={() => void approve(device)} disabled={busyId === device.id} className="rounded-xl bg-black px-4 py-2.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-50">{busyId === device.id ? "Approving..." : "Approve phone"}</button></div>}</Card>)}</div>
+    </>}
+  </section>;
+}
 
 export function StaffManager() {
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -28,6 +80,7 @@ export function StaffManager() {
   const [error, setError] = useState("");
   const [invite, setInvite] = useState<{ code: string; text: string; link: string } | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [tab, setTab] = useState<"staff" | "devices">("staff");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,8 +148,10 @@ export function StaffManager() {
     }
   }
 
-  return <><PageHeading eyebrow="People directory" title="Your team" description="Manage your people, their roles and branch details in one place." action={<div className="flex items-center gap-3"><span className="rounded-xl border border-black/[.06] bg-white px-3.5 py-2.5 text-xs font-medium text-neutral-600">{staff.length} team members</span><Button onClick={() => { setEditing(null); setForm({ ...emptyForm, branch_id: branches[0]?.id ?? "" }); setFormOpen(true); }}><HugeiconsIcon icon={Add01Icon} size={17} />Add staff</Button></div>} />
+  return <><PageHeading eyebrow="People directory" title="Your team" description="Manage your people, their roles and branch details in one place." action={tab === "staff" ? <div className="flex items-center gap-3"><span className="rounded-xl border border-black/[.06] bg-white px-3.5 py-2.5 text-xs font-medium text-neutral-600">{staff.length} team members</span><Button onClick={() => { setEditing(null); setForm({ ...emptyForm, branch_id: branches[0]?.id ?? "" }); setFormOpen(true); }}><HugeiconsIcon icon={Add01Icon} size={17} />Add staff</Button></div> : null} />
     {error && <Notice error>{error}</Notice>}{message && <div className="mb-4"><Notice>{message}</Notice></div>}
+    <div className="mb-5 inline-flex gap-1 rounded-xl bg-neutral-100 p-1" role="tablist" aria-label="Staff management"><button type="button" role="tab" aria-selected={tab === "staff"} onClick={() => setTab("staff")} className={`rounded-lg px-4 py-2 text-xs font-medium ${tab === "staff" ? "bg-white text-black shadow-sm" : "text-neutral-500 hover:text-black"}`}>Staff</button><button type="button" role="tab" aria-selected={tab === "devices"} onClick={() => setTab("devices")} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-medium ${tab === "devices" ? "bg-white text-black shadow-sm" : "text-neutral-500 hover:text-black"}`}><HugeiconsIcon icon={SmartphoneIcon} size={15} />Device approvals</button></div>
+    {tab === "devices" ? <StaffDeviceApprovals /> : <>
     {invite && <div className="mb-5"><Card><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold">Invite code: <span className="font-mono text-forest">{invite.code}</span></p><p className="mt-1 text-xs text-slate-500">Valid for 7 days. Share the one-time activation details securely.</p></div><div className="flex gap-2"><a className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold" href={`https://wa.me/?text=${encodeURIComponent(invite.text)}`} target="_blank" rel="noreferrer">Share on WhatsApp</a><button className="text-sm text-slate-400" onClick={() => setInvite(null)}>Dismiss</button></div></div></Card></div>}
     <div className="grid items-start gap-6">
       {formOpen && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-5" onClick={event => { if (event.target === event.currentTarget) setFormOpen(false); }}><Card className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-b-none sm:rounded-[20px]">
@@ -122,6 +177,7 @@ export function StaffManager() {
           <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400"><tr>{["Staff member", "Contact", "Branch", "Leave balance", "Status", "Invite", "Actions"].map(item => <th key={item} className="px-4 py-3 font-semibold">{item}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{filtered.map(person => { const year = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Mogadishu", year: "numeric" }).format(new Date()); const annualUsed = leaveRecords.filter(item => item.staff_id === person.id && item.status === "approved" && item.leave_type === "annual" && item.start_date.startsWith(year)).reduce((total, item) => { const d = new Date(`${item.start_date}T00:00:00Z`), end = new Date(`${item.end_date}T00:00:00Z`); let count = 0; while (d <= end) { const date = d.toISOString().slice(0, 10); if (d.getUTCDay() !== 5 && !holidays.some(h => h.date === date && (h.branch_id === null || h.branch_id === person.branch_id))) count++; d.setUTCDate(d.getUTCDate() + 1); } return total + count; }, 0); const allowance = person.annual_leave_days ?? 21; return <tr key={person.id} className="hover:bg-slate-50/70"><td className="px-4 py-4"><p className="font-semibold">{person.full_name}</p><p className="text-xs text-slate-400">{person.staff_code} · {person.job_title}</p></td><td className="px-4 py-4 text-xs leading-5 text-slate-500">{person.phone}<br />{person.email}</td><td className="px-4 py-4 text-xs">{person.branches?.name ?? "—"}</td><td className="px-4 py-4"><button onClick={() => setLeaveProfile(person)} className="rounded-lg bg-violet-50 px-2.5 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-100">{Math.max(0, allowance - annualUsed)} / {allowance} days</button></td><td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${person.status === "active" ? "bg-emerald-50 text-forest" : "bg-slate-100 text-slate-500"}`}>{person.status}</span></td><td className="px-4 py-4 text-xs capitalize text-slate-500">{person.invite_status}</td><td className="px-4 py-4"><div className="flex items-center gap-2"><button onClick={() => void sendInvite(person)} className="font-semibold text-forest hover:underline">Invite</button><button onClick={() => edit(person)} className="text-slate-500 hover:text-ink">Edit</button>{person.status === "active" && <button onClick={() => void deactivate(person)} className="text-rose-600 hover:underline">Deactivate</button>}</div></td></tr>; })}</tbody></table></div>}
       </Card>
     </div>
-    {leaveProfile && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-5" onClick={event => { if (event.target === event.currentTarget) setLeaveProfile(null); }}><Card className="max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-b-none sm:rounded-[20px]"><div className="flex items-start justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">Leave history</p><h2 className="mt-1 text-lg font-semibold">{leaveProfile.full_name}</h2><p className="mt-1 text-xs text-neutral-500">Annual allowance: {leaveProfile.annual_leave_days ?? 21} days. Edit this in the staff profile.</p></div><button onClick={() => setLeaveProfile(null)} className="rounded-lg px-3 py-2 text-sm hover:bg-neutral-100">Close</button></div><div className="mt-5 space-y-2">{leaveRecords.filter(item => item.staff_id === leaveProfile.id).slice(0, 8).map(item => <div key={item.id} className="rounded-xl bg-neutral-50 p-3"><div className="flex justify-between gap-3"><span className="text-sm font-medium capitalize">{item.leave_type} · {item.status}</span><span className="text-xs text-neutral-500">{item.start_date} – {item.end_date}</span></div><p className="mt-1 text-xs text-neutral-500">{item.reason}</p></div>)}{leaveRecords.every(item => item.staff_id !== leaveProfile.id) && <p className="py-5 text-center text-sm text-neutral-400">No leave history yet.</p>}</div></Card></div>}
+    </>}
+    {tab === "staff" && leaveProfile && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-5" onClick={event => { if (event.target === event.currentTarget) setLeaveProfile(null); }}><Card className="max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-b-none sm:rounded-[20px]"><div className="flex items-start justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">Leave history</p><h2 className="mt-1 text-lg font-semibold">{leaveProfile.full_name}</h2><p className="mt-1 text-xs text-neutral-500">Annual allowance: {leaveProfile.annual_leave_days ?? 21} days. Edit this in the staff profile.</p></div><button onClick={() => setLeaveProfile(null)} className="rounded-lg px-3 py-2 text-sm hover:bg-neutral-100">Close</button></div><div className="mt-5 space-y-2">{leaveRecords.filter(item => item.staff_id === leaveProfile.id).slice(0, 8).map(item => <div key={item.id} className="rounded-xl bg-neutral-50 p-3"><div className="flex justify-between gap-3"><span className="text-sm font-medium capitalize">{item.leave_type} · {item.status}</span><span className="text-xs text-neutral-500">{item.start_date} – {item.end_date}</span></div><p className="mt-1 text-xs text-neutral-500">{item.reason}</p></div>)}{leaveRecords.every(item => item.staff_id !== leaveProfile.id) && <p className="py-5 text-center text-sm text-neutral-400">No leave history yet.</p>}</div></Card></div>}
   </>;
 }

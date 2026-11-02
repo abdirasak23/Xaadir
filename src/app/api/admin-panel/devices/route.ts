@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { callAdminFunction } from "@/lib/edge";
 import { uuidSchema } from "@/lib/validation";
+import { requireAdminSession } from "@/lib/admin-auth";
 
 const requestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list"), staff_id: uuidSchema.optional() }),
@@ -10,6 +11,7 @@ const requestSchema = z.discriminatedUnion("action", [
 ]);
 
 export async function POST(request: Request) {
+  if (!await requireAdminSession()) return NextResponse.json({ error: "Admin sign-in required." }, { status: 401 });
   const parsed = requestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid device request." }, { status: 400 });
   try {

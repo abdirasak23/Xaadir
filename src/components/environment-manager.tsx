@@ -15,7 +15,7 @@ export function EnvironmentManager() {
   const [lat, setLat] = useState(0), [lng, setLng] = useState(0);
   const [radius, setRadius] = useState(100), [publicIp, setPublicIp] = useState("");
   const [wifi, setWifi] = useState<Wifi[]>([]);
-  const [ssid, setSsid] = useState(""), [bssid, setBssid] = useState("");
+  const [bssid, setBssid] = useState("");
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
   const [error, setError] = useState(""), [notice, setNotice] = useState("");
   const load = useCallback(async (preferred?: string) => {
@@ -44,7 +44,7 @@ export function EnvironmentManager() {
       const response = await fetch("/api/branches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newBranchName }) });
       const body = await response.json();
       if (!response.ok) { setError(body.error ?? "Branch could not be created."); return; }
-      setNewBranchName(""); await load(body.id); setNotice("Branch added. Set its map location and save the environment.");
+      setNewBranchName(""); await load(body.id); setNotice("Branch added. Set its location and save.");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Branch could not be created.");
     }
@@ -57,20 +57,20 @@ export function EnvironmentManager() {
       const response = await fetch("/api/branches", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: selectedId, name: branchName, lat, lng, radius_m: radius, public_ip: publicIp, wifi }) });
       const body = await response.json();
       if (!response.ok) setError(body.error ?? "Settings could not be saved.");
-      else { setNotice("Branch environment saved."); await load(selectedId); }
+      else { setNotice("Branch settings saved."); await load(selectedId); }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Settings could not be saved.");
     } finally { setBusy(false); }
   }
   function addWifi() {
     const normalized = bssid.trim().toUpperCase();
-    if (!ssid.trim() || !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(normalized)) { setError("Enter an SSID and a valid BSSID (AA:BB:CC:DD:EE:FF)."); return; }
+    if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(normalized)) { setError("Enter a valid BSSID (AA:BB:CC:DD:EE:FF)."); return; }
     if (wifi.some(item => item.bssid.toLowerCase() === normalized.toLowerCase())) { setError("That BSSID is already registered."); return; }
     if (wifi.length >= 50) { setError("A branch can have up to 50 Wi-Fi networks."); return; }
-    setWifi([...wifi, { ssid: ssid.trim(), bssid: normalized }]); setSsid(""); setBssid(""); setError("");
+    setWifi([...wifi, { ssid: `${branchName.trim() || "Office"} Wi-Fi`, bssid: normalized }]); setBssid(""); setError("");
   }
 
-  return <><PageHeading eyebrow="Configuration" title="Environment" description="Set trusted locations and Wi-Fi networks for each branch." />
+  return <><PageHeading eyebrow="Workspace setup" title="Branches" description="Manage branch locations and check-in requirements." />
     {error && <div className="mb-4"><Notice error>{error}</Notice></div>}{notice && <div className="mb-4"><Notice>{notice}</Notice></div>}
     {loading ? <Card><Loading /></Card> : <div className="grid items-start gap-6 xl:grid-cols-[320px_1fr]">
       <Card><h2 className="text-lg font-bold">Branches</h2><p className="mt-1 text-xs text-slate-500">Each branch has its own check-in rules and QR codes.</p>
@@ -88,10 +88,7 @@ export function EnvironmentManager() {
                 <div><h3 id="wifi-networks-heading" className="text-sm font-semibold text-neutral-900">Allowed Wi-Fi networks</h3><p className="mt-1 text-xs leading-5 text-slate-500">Add every office access point. Each network is matched by its BSSID.</p></div>
                 <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{wifi.length}/50</span>
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <Field label="Network name (SSID)"><Input placeholder="e.g. Xaadir Office" value={ssid} onChange={event => setSsid(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addWifi(); } }} /></Field>
-                <Field label="Access point BSSID"><Input placeholder="AA:BB:CC:DD:EE:FF" value={bssid} onChange={event => setBssid(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addWifi(); } }} /></Field>
-              </div>
+              <div className="mt-4"><Field label="Access point BSSID"><Input placeholder="AA:BB:CC:DD:EE:FF" value={bssid} onChange={event => setBssid(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addWifi(); } }} /></Field></div>
               <Button type="button" disabled={wifi.length >= 50} className="mt-3 w-full bg-neutral-900 text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50" onClick={addWifi}>Add Wi-Fi network</Button>
               <div className="mt-4 space-y-2">
                 {wifi.length ? wifi.map((network, index) => <div key={`${network.bssid}-${index}`} className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
@@ -99,11 +96,10 @@ export function EnvironmentManager() {
                   <button type="button" aria-label={`Remove ${network.ssid}`} onClick={() => { setWifi(wifi.filter((_, itemIndex) => itemIndex !== index)); setError(""); }} className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-rose-600 transition hover:bg-rose-50">Remove</button>
                 </div>) : <p className="rounded-xl border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-500">No Wi-Fi networks added yet. You can add more than one access point.</p>}
               </div>
-              <p className="mt-3 text-[11px] leading-5 text-slate-500">Your changes take effect when you select <strong>Save environment</strong>.</p>
+          <p className="mt-3 text-[11px] leading-5 text-slate-500">Changes apply after you save.</p>
             </section>
           </div>
-          <p className="rounded-xl bg-emerald-50 px-4 py-3 text-xs text-emerald-800">BSSID can also be registered from the Flutter app later.</p>
-          <Button disabled={busy}>{busy ? "Saving..." : "Save environment"}</Button>
+          <Button disabled={busy}>{busy ? "Saving..." : "Save branch settings"}</Button>
         </form>
       </Card> : <Card><p className="text-sm text-slate-500">Add your first branch to configure its environment.</p></Card>}
     </div>}

@@ -34,7 +34,7 @@ export function LiveQr({ branchId, liveKey, compact = false }: { branchId: strin
   }, [branchId, liveKey, compact]);
   return <div className="text-center">
     {error && <Notice error>{error}</Notice>}
-    {image ? <NextImage src={image} alt="Rotating live check-in QR code" width={compact ? 220 : 320} height={compact ? 220 : 320} unoptimized className="mx-auto rounded bg-white" /> : <div className="grid aspect-square w-full place-items-center bg-[#c8c8c8] text-sm text-neutral-700">{error ? "QR unavailable" : "Preparing QR…"}</div>}
+    {image ? <NextImage src={image} alt="Rotating live check-in QR code" width={compact ? 220 : 320} height={compact ? 220 : 320} unoptimized className="mx-auto rounded bg-white" /> : <div className="grid aspect-square w-full place-items-center rounded-2xl border border-neutral-100 bg-white shadow-[0_12px_36px_rgba(0,0,0,.06)] text-sm text-neutral-700">{error ? "QR unavailable" : "Preparing QR…"}</div>}
     <p className="mt-3 text-xs font-medium text-neutral-500">Refreshes in <span className="font-semibold tabular-nums text-black">{remaining}s</span></p>
   </div>;
 }
@@ -85,18 +85,18 @@ export function QrCodesManager() {
 
   const branch = branches.find(item => item.id === selectedId) ?? branches[0];
   return <>
-    <PageHeading eyebrow="Check-in setup" title="QR codes" description="Choose a static code to print or a live code that refreshes automatically." />
+    <PageHeading eyebrow="Check-in setup" title="QR codes" description="Print a permanent code or use a rotating live code." />
     {error && <div className="mb-5"><Notice error>{error}</Notice></div>}
     {notice && <div className="mb-5"><Notice>{notice}</Notice></div>}
-    {loading ? <Card><Loading /></Card> : !branch ? <Card><p className="text-sm text-neutral-500">Create a branch in Environment before generating QR codes.</p></Card> : <div className="mx-auto w-full max-w-3xl">
+    {loading ? <Card><Loading /></Card> : !branch ? <Card><p className="text-sm text-neutral-500">Add a branch before generating QR codes.</p></Card> : <div className="mx-auto w-full max-w-3xl">
       {branches.length > 1 && <div className="mb-5 flex justify-center"><select aria-label="Choose branch" value={branch.id} onChange={event => setSelectedId(event.target.value)} className="min-w-52 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-sm font-medium shadow-sm">{branches.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>}
-      <Card className="min-h-[470px] overflow-hidden px-5 py-8 sm:px-10 sm:py-10">
-        <div role="tablist" aria-label="QR type" className="mx-auto mb-10 flex w-full max-w-[560px] rounded-[14px] bg-[#dedede] p-[7px]">
+      <Card className="min-h-[470px] overflow-hidden px-5 py-7 sm:px-10 sm:py-9">
+        <div role="tablist" aria-label="QR type" className="mx-auto mb-8 flex w-full max-w-[560px] rounded-[14px] bg-neutral-100 p-[5px]">
           {([["static", "Static QR"], ["live", "Live QR"]] as const).map(([value, label]) => <button key={value} id={`qr-tab-${value}`} type="button" role="tab" aria-selected={mode === value} onClick={() => setMode(value)} className={`min-h-10 flex-1 rounded-[9px] px-3 text-sm font-medium transition sm:text-base ${mode === value ? "bg-[#222] text-white shadow-sm" : "bg-white text-neutral-800 hover:bg-neutral-50"}`}>{label}</button>)}
         </div>
         <section role="tabpanel" aria-labelledby={`qr-tab-${mode}`} className="mx-auto flex max-w-xl flex-col items-center text-center">
           <p className="mb-5 text-sm font-medium text-neutral-600">{branch.name}</p>
-          {mode === "static" ? <><div className="grid h-[240px] w-[240px] place-items-center bg-[#c8c8c8] p-2 sm:h-[260px] sm:w-[260px]"><StaticQr branch={branch} /></div><p className="mt-4 text-xs text-neutral-500">Permanent check-in code · printed copies become invalid when regenerated.</p><div className="mt-5 flex flex-wrap justify-center gap-2"><Button disabled={regenerating} onClick={() => void regenerateStatic(branch)}>{regenerating ? "Regenerating…" : "Regenerate QR"}</Button><button className="rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-sm font-medium text-neutral-800 hover:bg-neutral-50" onClick={() => void printStatic(branch)}>Print / Save as PDF</button></div></> : <><div className="grid w-[240px] place-items-center bg-[#c8c8c8] p-2 sm:w-[260px]"><LiveQr branchId={branch.id} liveKey={branch.live_qr_secret} compact /></div><p className="mt-4 text-xs text-neutral-500">The code refreshes automatically for secure check-ins.</p><a className="mt-4 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-xs font-medium hover:bg-neutral-50" href={`/qr/live/${branch.id}?k=${encodeURIComponent(branch.live_qr_secret)}`} target="_blank" rel="noreferrer">Open live QR in new tab</a></>}
+          {mode === "static" ? <><div className="grid h-[280px] w-[280px] place-items-center rounded-2xl border border-neutral-100 bg-white shadow-[0_12px_36px_rgba(0,0,0,.06)] p-2 sm:h-[300px] sm:w-[300px]"><StaticQr branch={branch} /></div><p className="mt-4 text-xs text-neutral-500">Static check-in code · printed copies become invalid when regenerated.</p><div className="mt-5 flex flex-wrap justify-center gap-2"><Button disabled={regenerating} onClick={() => void regenerateStatic(branch)}>{regenerating ? "Regenerating…" : "Regenerate QR"}</Button><button className="rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-sm font-medium text-neutral-800 hover:bg-neutral-50" onClick={() => void printStatic(branch)}>Print / Save as PDF</button></div></> : <><div className="grid w-[280px] place-items-center rounded-2xl border border-neutral-100 bg-white shadow-[0_12px_36px_rgba(0,0,0,.06)] p-2 sm:w-[300px]"><LiveQr branchId={branch.id} liveKey={branch.live_qr_secret} /></div><p className="mt-4 text-xs text-neutral-500">Refreshes automatically every 30 seconds.</p><a className="mt-4 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-xs font-medium hover:bg-neutral-50" href={`/qr/live/${branch.id}?k=${encodeURIComponent(branch.live_qr_secret)}`} target="_blank" rel="noreferrer">Open live QR in new tab</a></>}
         </section>
       </Card>
     </div>}
@@ -107,8 +107,8 @@ function StaticQr({ branch }: { branch: Branch }) {
   const [image, setImage] = useState("");
   useEffect(() => {
     let active = true;
-    void QRCode.toDataURL(`xaadir://checkin?b=${branch.id}&t=${branch.static_qr_secret}`, { width: 240, margin: 2 }).then(value => { if (active) setImage(value); });
+    void QRCode.toDataURL(`xaadir://checkin?b=${branch.id}&t=${branch.static_qr_secret}`, { width: 280, margin: 2 }).then(value => { if (active) setImage(value); });
     return () => { active = false; };
   }, [branch.id, branch.static_qr_secret]);
-  return image ? <NextImage src={image} alt={`Permanent check-in QR for ${branch.name}`} width={240} height={240} unoptimized className="mx-auto w-[220px] bg-white" /> : <div className="h-[220px] w-[220px] animate-pulse bg-[#c8c8c8]" />;
+  return image ? <NextImage src={image} alt={`Permanent check-in QR for ${branch.name}`} width={280} height={280} unoptimized className="mx-auto w-[280px] bg-white" /> : <div className="h-[260px] w-[260px] animate-pulse rounded-2xl border border-neutral-100 bg-white shadow-[0_12px_36px_rgba(0,0,0,.06)]" />;
 }

@@ -15,6 +15,7 @@ type Company = {
   company_admins: { full_name: string; email: string; phone: string }[];
 };
 type Credentials = { company: string; fullName: string; email: string; phone: string; password: string };
+type RecoveryCode = { company: string; fullName: string; email: string; code: string; expiresAt: string };
 
 export function CompanyManager() {
   const router = useRouter();
@@ -22,6 +23,8 @@ export function CompanyManager() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [form, setForm] = useState({ company_name: "", full_name: "", email: "", phone: "" });
   const [credentials, setCredentials] = useState<Credentials | null>(null);
+  const [recoveryCode, setRecoveryCode] = useState<RecoveryCode | null>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -87,6 +90,26 @@ export function CompanyManager() {
     }
   }
 
+  async function issueRecoveryCode(company: Company, admin: Company["company_admins"][number] | undefined) {
+    if (!admin) return;
+    if (!window.confirm(`Issue a one-time HR recovery code for ${admin.full_name}? It expires in 30 minutes.`)) return;
+    setError(""); setRecoveryBusy(company.id); setRecoveryCode(null);
+    try {
+      const response = await fetch(`/api/admin-panel/companies/${company.id}/recovery-code`, { method: "POST" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Could not issue recovery code.");
+      setRecoveryCode({ company: company.name, fullName: result.full_name, email: result.email, code: result.code, expiresAt: result.expires_at });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not issue recovery code.");
+    } finally { setRecoveryBusy(null); }
+  }
+
+  async function copyRecoveryCode() {
+    if (!recoveryCode) return;
+    try { await navigator.clipboard.writeText(`Xaadir HR recovery code for ${recoveryCode.email}: ${recoveryCode.code}\nExpires: ${new Date(recoveryCode.expiresAt).toLocaleString()}`); }
+    catch (reason) { setError(reason instanceof Error ? `Could not copy recovery code: ${reason.message}` : "Could not copy recovery code."); }
+  }
+
   return <main className="min-h-screen">
     <header className="sticky top-0 z-10 flex h-[72px] items-center justify-between border-b border-emerald-950/5 bg-white/95 px-5 backdrop-blur md:px-10">
       <div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-950 font-bold text-white">X</span><div><p className="font-bold">Xaadir control</p><p className="text-[11px] text-slate-500">Developer admin</p></div></div>
@@ -101,6 +124,11 @@ export function CompanyManager() {
         <dl className="mt-5 grid gap-3 rounded-xl border border-emerald-100 bg-white p-4 text-sm sm:grid-cols-2"><div><dt className="text-xs text-slate-400">HR contact</dt><dd className="mt-1 font-semibold">{credentials.fullName}</dd></div><div><dt className="text-xs text-slate-400">Login email</dt><dd className="mt-1 font-semibold">{credentials.email}</dd></div><div><dt className="text-xs text-slate-400">Phone</dt><dd className="mt-1 font-semibold">{credentials.phone}</dd></div><div><dt className="text-xs text-slate-400">Temporary password</dt><dd className="mt-1 font-mono font-bold text-forest">{credentials.password}</dd></div></dl>
         <button onClick={() => setCredentials(null)} className="mt-3 text-xs text-slate-500">Dismiss credentials</button>
       </Card></div>}
+      {recoveryCode && <div className="mb-6"><Card className="border-amber-200 bg-amber-50/60">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-widest text-amber-800">One-time recovery code · share securely</p><h2 className="mt-1 text-lg font-bold">{recoveryCode.company} · {recoveryCode.fullName}</h2><p className="mt-1 text-sm text-slate-600">Send this code to the HR contact through a trusted channel. It expires in 30 minutes and works once.</p></div><Button onClick={() => void copyRecoveryCode()} className="shrink-0">Copy code</Button></div>
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-100 bg-white p-4"><code className="break-all text-lg font-bold tracking-wider">{recoveryCode.code}</code><span className="text-xs text-slate-500">{recoveryCode.email} · expires {new Date(recoveryCode.expiresAt).toLocaleTimeString()}</span></div>
+        <button onClick={() => setRecoveryCode(null)} className="mt-3 text-xs text-slate-500">Dismiss code</button>
+      </Card></div>}
       <div className="grid items-start gap-6 lg:grid-cols-[390px_1fr]">
         <Card><p className="text-xs font-bold uppercase tracking-widest text-forest">New workspace</p><h2 className="mt-1 text-lg font-bold">Register a company</h2><p className="mb-5 mt-1 text-xs leading-5 text-slate-500">Creates the company and its first HR Supabase Auth account.</p>
           <form onSubmit={createCompany} className="space-y-4">
@@ -114,7 +142,7 @@ export function CompanyManager() {
         </Card>
         <Card className="min-w-0 p-0"><div className="border-b border-slate-100 p-5"><h2 className="font-bold">Registered companies</h2><p className="mt-1 text-xs text-slate-500">Company workspace and assigned HR login.</p></div>
           {loading ? <Loading /> : companies.length === 0 ? <p className="p-8 text-center text-sm text-slate-400">No companies registered yet.</p> :
-            <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400"><tr><th className="px-4 py-3">Company</th><th className="px-4 py-3">HR contact</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Created</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map(company => { const admin = company.company_admins?.[0]; return <tr key={company.id}><td className="px-4 py-4 font-semibold">{company.name}</td><td className="px-4 py-4"><p>{admin?.full_name ?? "—"}</p><p className="text-xs text-slate-400">{admin?.email}</p></td><td className="px-4 py-4"><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-forest">{company.status}</span></td><td className="px-4 py-4 text-xs text-slate-500">{new Date(company.created_at).toLocaleDateString()}</td></tr>; })}</tbody></table></div>}
+            <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400"><tr><th className="px-4 py-3">Company</th><th className="px-4 py-3">HR contact</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Created</th><th className="px-4 py-3">Account</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map(company => { const admin = company.company_admins?.[0]; return <tr key={company.id}><td className="px-4 py-4 font-semibold">{company.name}</td><td className="px-4 py-4"><p>{admin?.full_name ?? "—"}</p><p className="text-xs text-slate-400">{admin?.email}</p></td><td className="px-4 py-4"><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-forest">{company.status}</span></td><td className="px-4 py-4 text-xs text-slate-500">{new Date(company.created_at).toLocaleDateString()}</td><td className="px-4 py-4"><button type="button" disabled={!admin || recoveryBusy === company.id} onClick={() => void issueRecoveryCode(company, admin)} className="whitespace-nowrap rounded-lg border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-800 hover:bg-neutral-50 disabled:opacity-50">{recoveryBusy === company.id ? "Issuing…" : "Issue reset code"}</button></td></tr>; })}</tbody></table></div>}
         </Card>
       </div>
     </div> : <DeviceManager view={view} />}

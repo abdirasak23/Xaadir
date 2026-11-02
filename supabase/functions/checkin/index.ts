@@ -9,6 +9,11 @@ const schema = z.object({
   wifi_bssid: z.string().regex(/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/).nullable().optional(),
   device_id: z.string().trim().min(1).max(200), device_name: z.string().trim().max(100).optional(),
 });
+const deviceRequestSchema = z.object({
+  action: z.literal("request_device"),
+  device_id: z.string().trim().min(16).max(128),
+  device_name: z.string().trim().max(100).optional(),
+});
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } }); }
 function decode(value: string) {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -36,7 +41,39 @@ function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number) 
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: cors });
-  const parsed = schema.safeParse(await request.json().catch(() => null));
+  const raw = await request.json().catch(() => null);
+  if (raw && typeof raw === "object" && (raw as { action?: unknown }).action === "request_device") {
+    const parsedRequest = deviceRequestSchema.safeParse(raw);
+    if (!parsedRequest.success) return response({ reason: "INVALID_INPUT", message: parsedRequest.error.issues[0]?.message ?? "Invalid device request." }, 400);
+    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const authorization = request.headers.get("Authorization") ?? "";
+    const token = authorization.toLowerCase().startsWith("bearer ") ? authorization.slice(7).trim() : "";
+    if (!token) return response({ reason: "UNAUTHORIZED", message: "Please sign in before requesting device approval." }, 401);
+    const { data: authData, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !authData.user) return response({ reason: "UNAUTHORIZED", message: "Your session expired. Please sign in again." }, 401);
+    const { data: staff, error: staffError } = await supabase.from("staff").select("id,status,must_change_password").eq("auth_user_id", authData.user.id).maybeSingle();
+    if (staffError) return response({ reason: "LOOKUP_FAILED", message: "Could not verify your staff account." }, 500);
+    if (!staff || staff.status !== "active") return response({ reason: "STAFF_INACTIVE", message: "This staff account is not active." }, 403);
+    if (staff.must_change_password) return response({ reason: "PASSWORD_CHANGE_REQUIRED", message: "Change your password first." }, 403);
+
+    const { data: approvedDevice, error: deviceError } = await supabase.from("devices").select("id").eq("staff_id", staff.id).eq("device_id", parsedRequest.data.device_id).eq("approved", true).maybeSingle();
+    if (deviceError) return response({ reason: "DEVICE_CHECK_FAILED", message: "Could not check this phone's approval." }, 500);
+    if (approvedDevice) return response({ ok: true, status: "approved", message: "This phone is already approved." });
+
+    const { data: savedRequest, error: requestError } = await supabase.from("device_requests").upsert({
+      staff_id: staff.id,
+      device_id: parsedRequest.data.device_id,
+      device_name: parsedRequest.data.device_name ?? null,
+      status: "pending",
+      requested_at: new Date().toISOString(),
+      decided_at: null,
+      decided_by: null,
+    }, { onConflict: "staff_id,device_id" }).select("id").single();
+    if (requestError) return response({ reason: "DEVICE_REQUEST_FAILED", message: "Could not send your request to HR." }, 500);
+    return response({ ok: true, status: "pending", request_id: savedRequest.id, message: "Request sent. HR will review it." });
+  }
+
+  const parsed = schema.safeParse(raw);
   if (!parsed.success) return response({ reason: "INVALID_INPUT", message: parsed.error.issues[0]?.message ?? "Invalid check-in details." }, 400);
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const { data: authData, error: authError } = await supabase.auth.getUser(parsed.data.staff_jwt);
@@ -73,8 +110,10 @@ Deno.serve(async (request) => {
   const { data: device, error: deviceError } = await supabase.from("devices").select("id,approved").eq("staff_id", staff.id).eq("device_id", parsed.data.device_id).maybeSingle();
   if (deviceError) return response({ reason: "DEVICE_CHECK_FAILED", message: deviceError.message }, 500);
   if (!device) {
-    const { error } = await supabase.from("devices").insert({ staff_id: staff.id, device_id: parsed.data.device_id, device_name: parsed.data.device_name ?? null, approved: true });
+    const { error } = await supabase.from("devices").insert({ staff_id: staff.id, device_id: parsed.data.device_id, device_name: parsed.data.device_name ?? null, approved: false });
+    if (error?.code === "23505") return response({ reason: "DEVICE_NOT_APPROVED", message: "This phone is waiting for HR approval. Try again after your HR team approves it." }, 403);
     if (error) return response({ reason: "DEVICE_BIND_FAILED", message: "Could not bind this device." }, 400);
+    return response({ reason: "DEVICE_PENDING_APPROVAL", message: "This phone has been sent to HR for approval. Try again after they approve it." }, 403);
   } else if (!device.approved) return response({ reason: "DEVICE_NOT_APPROVED", message: "This device has not been approved." }, 403);
   const now = new Date();
   const openShift = dayRows.find(row => row.check_in_at && !row.check_out_at && ["present", "late", "manual"].includes(row.status));

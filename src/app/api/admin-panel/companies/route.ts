@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { callAdminFunction } from "@/lib/edge";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { requireAdminSession } from "@/lib/admin-auth";
 
 const companySchema = z.object({
   company_name: z.string().trim().min(1).max(120),
@@ -11,6 +12,7 @@ const companySchema = z.object({
 });
 
 export async function GET() {
+  if (!await requireAdminSession()) return NextResponse.json({ error: "Admin sign-in required." }, { status: 401 });
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("companies")
@@ -21,6 +23,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  if (!await requireAdminSession()) return NextResponse.json({ error: "Admin sign-in required." }, { status: 401 });
   const parsed = companySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
