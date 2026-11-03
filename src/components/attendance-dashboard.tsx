@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, Input, Loading, Notice, PageHeading } from "@/components/ui";
 import { localDateInTimezone, WEEKEND_DAYS } from "../../shared/attendance-rules";
 
-type Staff = { id: string; full_name: string; staff_code: string; status: string; branch_id: string; annual_leave_days?: number };
+type Staff = { id: string; full_name: string; staff_code: string; status: string; branch_id: string; annual_leave_days?: number; scheduled_shifts?: { start: string; end: string; day?: number }[]; shift_start?: string; shift_end?: string };
 type Holiday = { id: string; date: string; name: string; branch_id: string | null };
 type Attendance = {
   id: string; staff_id: string; branch_id: string; date: string; shift_number?: number; check_in_at: string | null; check_out_at: string | null;
@@ -103,7 +103,7 @@ export function AttendanceDashboard() {
   }, [from, to, branch]);
   const workDates = useCallback((start: string, end: string, person?: Staff) => {
     const dates: string[] = []; const d = new Date(`${start}T00:00:00Z`), last = new Date(`${end}T00:00:00Z`);
-    while (d <= last) { const date = d.toISOString().slice(0, 10); const holiday = holidays.some(item => item.date === date && (item.branch_id === null || item.branch_id === person?.branch_id)); if (!WEEKEND_DAYS.includes(d.getUTCDay() as 5) && !holiday) dates.push(date); d.setUTCDate(d.getUTCDate() + 1); }
+    while (d <= last) { const date = d.toISOString().slice(0, 10); const weekday = d.getUTCDay(); const holiday = holidays.some(item => item.date === date && (item.branch_id === null || item.branch_id === person?.branch_id)); const schedule = person?.scheduled_shifts ?? []; const scheduled = schedule.some(shift => shift.day !== undefined) ? schedule.some(shift => shift.day === weekday) : schedule.length > 0 || Boolean(person?.shift_start && person?.shift_end); if (!WEEKEND_DAYS.includes(weekday as 5) && scheduled && !holiday) dates.push(date); d.setUTCDate(d.getUTCDate() + 1); }
     return dates;
   }, [holidays]);
   const metrics = useMemo(() => {

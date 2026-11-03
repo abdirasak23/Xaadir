@@ -18,7 +18,7 @@ export const branchSchema = z.object({
     bssid: z.string().regex(/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/),
   })).max(50).refine(items => new Set(items.map(item => item.bssid.toLowerCase())).size === items.length, "Wi-Fi BSSIDs must be unique."),
 });
-const shiftSchema = z.object({ start: timeSchema, end: timeSchema }).refine(shift => shift.end > shift.start, "Shift end must be after its start.");
+const shiftSchema = z.object({ start: timeSchema, end: timeSchema, day: z.number().int().min(0).max(6).optional() }).refine(shift => shift.end !== shift.start, "Shift start and end cannot be the same.");
 export const staffSchema = z.object({
   full_name: z.string().trim().min(1).max(120),
   staff_code: z.string().trim().min(1).max(40),
@@ -28,17 +28,35 @@ export const staffSchema = z.object({
   branch_id: uuidSchema,
   shift_start: timeSchema,
   shift_end: timeSchema,
-  scheduled_shifts: z.array(shiftSchema).min(1).max(8).optional(),
+  scheduled_shifts: z.array(shiftSchema).min(1).max(56).optional(),
   monthly_salary: z.number().finite().min(0).max(1_000_000_000).default(0),
   annual_leave_days: z.number().int().min(0).max(365).default(21),
 }).superRefine((staff, context) => {
   const shifts = staff.scheduled_shifts?.length ? staff.scheduled_shifts : [{ start: staff.shift_start, end: staff.shift_end }];
-  for (let index = 1; index < shifts.length; index++) {
-    if (shifts[index].start <= shifts[index - 1].end) context.addIssue({ code: "custom", path: ["scheduled_shifts", index], message: "Shifts must be ordered and cannot overlap." });
+  for (let day = 0; day < 7; day++) {
+    const applicable = shifts.map((shift, index) => ({ ...shift, index }))
+      .filter(shift => shift.day === undefined || shift.day === day);
+    for (let left = 0; left < applicable.length; left++) {
+      const a = applicable[left];
+      const aStart = Number(a.start.slice(0, 2)) * 60 + Number(a.start.slice(3, 5));
+      const rawAEnd = Number(a.end.slice(0, 2)) * 60 + Number(a.end.slice(3, 5));
+      const aEnd = rawAEnd <= aStart ? rawAEnd + 1440 : rawAEnd;
+      for (let right = left + 1; right < applicable.length; right++) {
+        const b = applicable[right];
+        const bStart = Number(b.start.slice(0, 2)) * 60 + Number(b.start.slice(3, 5));
+        const rawBEnd = Number(b.end.slice(0, 2)) * 60 + Number(b.end.slice(3, 5));
+        const bEnd = rawBEnd <= bStart ? rawBEnd + 1440 : rawBEnd;
+        const overlaps = [-1440, 0, 1440].some(offset => aStart < bEnd + offset && aEnd > bStart + offset);
+        if (overlaps) {
+          context.addIssue({ code: "custom", path: ["scheduled_shifts", b.index], message: `Shift overlaps another shift on ${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day]}.` });
+          break;
+        }
+      }
+    }
   }
 }).transform(staff => {
   const scheduled_shifts = staff.scheduled_shifts?.length ? staff.scheduled_shifts : [{ start: staff.shift_start, end: staff.shift_end }];
-  return { ...staff, scheduled_shifts, shift_start: scheduled_shifts[0].start, shift_end: scheduled_shifts[scheduled_shifts.length - 1].end };
+  return { ...staff, scheduled_shifts, shift_start: scheduled_shifts[0].start, shift_end: scheduled_shifts[0].end };
 });
 export const manualAttendanceSchema = z.object({
   staff_id: uuidSchema,

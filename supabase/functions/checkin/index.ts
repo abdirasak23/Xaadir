@@ -116,15 +116,37 @@ Deno.serve(async (request) => {
     return response({ reason: "DEVICE_PENDING_APPROVAL", message: "This phone has been sent to HR for approval. Try again after they approve it." }, 403);
   } else if (!device.approved) return response({ reason: "DEVICE_NOT_APPROVED", message: "This device has not been approved." }, 403);
   const now = new Date();
-  const openShift = dayRows.find(row => row.check_in_at && !row.check_out_at && ["present", "late", "manual"].includes(row.status));
+  const localClock = new Intl.DateTimeFormat("en-GB", { timeZone: TIMEZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const nowMin = Number(localClock.find(part => part.type === "hour")?.value ?? 0) * 60 + Number(localClock.find(part => part.type === "minute")?.value ?? 0);
+  let openShift = dayRows.find(row => row.check_in_at && !row.check_out_at && ["present", "late", "manual"].includes(row.status));
+  if (!openShift) {
+    const previousDate = new Date(Date.parse(`${date}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+    const { data: previousRows, error: previousError } = await supabase.from("attendance").select("id,status,note,shift_number,check_in_at,check_out_at").eq("staff_id", staff.id).eq("date", previousDate).order("shift_number");
+    if (previousError) return response({ reason: "ATTENDANCE_LOOKUP_FAILED", message: "Could not check your previous shift." }, 500);
+    const previousWeekday = new Date(`${previousDate}T00:00:00Z`).getUTCDay();
+    const configured = Array.isArray(staff.scheduled_shifts) ? staff.scheduled_shifts as { start: string; end: string; day?: number }[] : [];
+    const previousShifts = configured.some(shift => shift.day !== undefined)
+      ? configured.filter(shift => shift.day === previousWeekday)
+      : configured.length ? configured : [{ start: staff.shift_start.slice(0, 5), end: staff.shift_end.slice(0, 5) }];
+    openShift = (previousRows ?? []).find(row => {
+      if (!row.check_in_at || row.check_out_at || !["present", "late", "manual"].includes(row.status)) return false;
+      const shift = previousShifts[(row.shift_number ?? 1) - 1];
+      if (!shift || shift.end > shift.start) return false;
+      const [endHour, endMinute] = shift.end.split(":").map(Number);
+      return nowMin <= endHour * 60 + endMinute;
+    });
+  }
   if (openShift) {
     const { data, error } = await supabase.from("attendance").update({ check_out_at: now.toISOString() }).eq("id", openShift.id).is("check_out_at", null).select().single();
     if (error) return response({ reason: "ATTENDANCE_SAVE_FAILED", message: error.message }, 400);
     return response({ ok: true, action: "check_out", attendance: data });
   }
-  const shifts = Array.isArray(staff.scheduled_shifts) && staff.scheduled_shifts.length
-    ? staff.scheduled_shifts as { start: string; end: string }[]
-    : [{ start: staff.shift_start.slice(0, 5), end: staff.shift_end.slice(0, 5) }];
+  const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+  const configured = Array.isArray(staff.scheduled_shifts) ? staff.scheduled_shifts as { start: string; end: string; day?: number }[] : [];
+  const shifts = configured.some(shift => shift.day !== undefined)
+    ? configured.filter(shift => shift.day === weekday)
+    : configured.length ? configured : [{ start: staff.shift_start.slice(0, 5), end: staff.shift_end.slice(0, 5) }];
+  if (shifts.length === 0) return response({ reason: "NOT_SCHEDULED", message: "You do not have a shift scheduled for today." }, 403);
   const nextIndex = shifts.findIndex((_, index) => !dayRows.some(row => row.shift_number === index + 1 && row.status !== "absent"));
   if (nextIndex < 0) return response({ reason: "ATTENDANCE_COMPLETE", message: "All scheduled shifts are already recorded for today." }, 409);
   const shiftNumber = nextIndex + 1;

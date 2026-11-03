@@ -7,7 +7,7 @@ const inputSchema = z.object({
   email: z.string().email().max(254), phone: z.string().trim().min(6).max(30),
   job_title: z.string().trim().min(1).max(100), branch_id: z.string().uuid(), company_id: z.string().uuid(),
   shift_start: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/), shift_end: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
-  scheduled_shifts: z.array(z.object({ start: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/), end: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/) })).min(1).max(8).optional(),
+  scheduled_shifts: z.array(z.object({ start: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/), end: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/), day: z.number().int().min(0).max(6).optional() }).refine(shift => shift.start !== shift.end, "Shift start and end cannot be the same.")).min(1).max(56).optional(),
   monthly_salary: z.number().min(0).max(1000000000).default(0),
   annual_leave_days: z.number().int().min(0).max(365).default(21),
 });

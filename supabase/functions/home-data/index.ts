@@ -243,12 +243,14 @@ function panelLateMinutes(record: PayrollAttendance, shift: Shift | undefined) {
   return Math.max(0, Math.floor((Date.parse(record.check_in_at) - start) / 60_000) - 5);
 }
 
-function scheduleOf(staff: StaffRow): Shift[] {
+function scheduleOf(staff: StaffRow, date?: string): Shift[] {
   const raw = Array.isArray(staff.scheduled_shifts) ? (staff.scheduled_shifts as any[]) : [];
-  const list: Shift[] = raw
+  const weekly = raw.some((s) => Number.isInteger(s?.day));
+  const selected = weekly && date ? raw.filter((s) => s?.day === fromYmd(date).getUTCDay()) : weekly ? [] : raw;
+  const list: Shift[] = selected
     .filter((s) => s && typeof s.start === "string" && typeof s.end === "string")
     .map((s, i) => ({ number: i + 1, startMin: timeToMin(s.start), endMin: timeToMin(s.end) }));
-  if (list.length) return list;
+  if (list.length || weekly) return list;
   return [{ number: 1, startMin: timeToMin(staff.shift_start), endMin: timeToMin(staff.shift_end) }];
 }
 
@@ -294,8 +296,10 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
   const leaves = (leaveRes.data ?? []) as { leave_type: string; start_date: string; end_date: string }[];
   const leaveOn = (date: string) => leaves.find((l) => l.start_date <= date && l.end_date >= date);
 
-  const sched = scheduleOf(staff);
-  const totalMin = sched.reduce((a, s) => a + shiftLength(s), 0);
+  const schedules = new Map<string, Shift[]>(datesOfMonth(monthStart, monthEnd).map((date): [string, Shift[]] => [date, scheduleOf(staff, date)]));
+  const dateShifts = (date: string) => schedules.get(date) ?? [];
+  const scheduledDates = [...schedules].filter(([date, shifts]) => !isWeekend(date) && shifts.length > 0).map(([date]) => date);
+  const totalMin = scheduledDates.length ? scheduledDates.reduce((sum, date) => sum + dateShifts(date).reduce((day, shift) => day + shiftLength(shift), 0), 0) / scheduledDates.length : 0;
   const hoursPerDay = totalMin / 60;
   // The Next.js payroll panel currently applies a fixed five-minute grace.
   const grace = 5;
@@ -304,7 +308,7 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
   const dates: string[] = [];
   for (let d = monthStart; d <= monthEnd; d = addDays(d, 1)) if (!isWeekend(d)) dates.push(d);
 
-  const payableDates = dates.filter((date) => !holMap.has(date));
+  const payableDates = scheduledDates.filter((date) => !holMap.has(date));
   const workingDays = payableDates.length;
   const daily = workingDays > 0 ? salary / workingDays : 0;
   const perMin = workingDays > 0 && hoursPerDay > 0 ? salary / workingDays / hoursPerDay / 60 : 0;
@@ -314,11 +318,14 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
   let lateMinutes = 0;
   let lateDed = 0;
   for (const record of records) {
+    const sched = dateShifts(record.date);
     const shift = sched[Math.max(0, (record.shift_number ?? 1) - 1)];
     const late = panelLateMinutes(record, shift);
     lateByShift.set(`${record.date}|${record.shift_number ?? 1}`, late);
+    const dailyMinutes = sched.reduce((sum, item) => sum + shiftLength(item), 0);
+    const recordRate = workingDays > 0 && dailyMinutes > 0 ? salary / workingDays / (dailyMinutes / 60) / 60 : 0;
     lateMinutes += late;
-    lateDed += perMin * late;
+    lateDed += recordRate * late;
   }
   let absDed = 0;
   let absentDays = 0;
@@ -329,8 +336,9 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
 
   for (const date of dates) {
     const holidayName = holMap.get(date);
-    if (!holidayName && date < today) elapsed += 1;
-    else if (!holidayName && date === today && totalMin > 0) {
+    const sched = dateShifts(date);
+    if (!holidayName && sched.length && date < today) elapsed += 1;
+    else if (!holidayName && sched.length && date === today && totalMin > 0) {
       const done = sched.reduce((a, s) => a + Math.min(Math.max(nowMin - s.startMin, 0), shiftLength(s)), 0);
       elapsed += done / totalMin;
     }
@@ -339,7 +347,7 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
     const dateRecords = records.filter((record) => record.date === date);
     const presentToday = dateRecords.some((record) => ["present", "late", "manual"].includes(record.status));
     const excusedToday = dateRecords.some((record) => ["leave", "sick", "holiday"].includes(record.status)) || Boolean(leave);
-    const eligiblePast = !holidayName && date < today && !excusedToday;
+    const eligiblePast = !holidayName && sched.length > 0 && date < today && !excusedToday;
     if (eligiblePast) {
       expectedDays += 1;
       if (presentToday) attendanceDays += 1;
@@ -373,7 +381,9 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
           row.kind = "late";
           row.late_min = counted;
           row.counted_late_min = counted;
-          row.deduction = r2(counted * perMin);
+          const dateMinutes = sched.reduce((sum, item) => sum + shiftLength(item), 0);
+          const dateRate = workingDays > 0 && dateMinutes > 0 ? salary / workingDays / (dateMinutes / 60) / 60 : 0;
+          row.deduction = r2(counted * dateRate);
         }
       } else if (holMap.has(date)) {
         row.kind = "holiday";
@@ -381,7 +391,7 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
       } else if (leave) {
         row.kind = leave.leave_type === "sick" ? "sick" : "leave";
       } else {
-        const over = date < today || (date === today && nowMin >= s.endMin);
+        const over = date < today || (date === today && s.endMin > s.startMin && nowMin >= s.endMin);
         row.kind = a?.status === "absent" || over ? "unexcused" : "future";
       }
       rows.push(row);
@@ -428,6 +438,12 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
     },
     days,
   };
+}
+
+function datesOfMonth(start: string, end: string) {
+  const dates: string[] = [];
+  for (let date = start; date <= end; date = addDays(date, 1)) dates.push(date);
+  return dates;
 }
 
 Deno.serve(async (request) => {
@@ -505,6 +521,7 @@ Deno.serve(async (request) => {
 
     const branch = Array.isArray(staff.branches) ? staff.branches[0] : staff.branches;
     const fullName = staff.full_name.trim();
+    const todayShifts = scheduleOf(staff, today);
 
     return json({
       server_date: today,
@@ -515,13 +532,14 @@ Deno.serve(async (request) => {
         branch_name: branch?.name ?? "",
       },
       shift: {
-        start_min: timeToMin(staff.shift_start),
-        end_min: timeToMin(staff.shift_end),
+        start_min: todayShifts[0]?.startMin ?? null,
+        end_min: todayShifts[0]?.endMin ?? null,
+        shifts: todayShifts.map(({ number, startMin, endMin }) => ({ number, start_min: startMin, end_min: endMin })),
         grace_minutes: staff.grace_minutes,
       },
       today: todayBlock(rows.get(today)),
       month,
-      chart: { shift_start_min: timeToMin(staff.shift_start), days: chartDays },
+      chart: { shift_start_min: todayShifts[0]?.startMin ?? null, days: chartDays },
       recent,
       payroll,
     });

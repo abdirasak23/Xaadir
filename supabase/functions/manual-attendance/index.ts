@@ -21,15 +21,25 @@ Deno.serve(async (request) => {
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return response({ error: parsed.error.issues[0]?.message ?? "Invalid attendance details." }, 400);
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-  const { data: staff, error: staffError } = await supabase.from("staff").select("id,company_id,branch_id,shift_start,scheduled_shifts,grace_minutes,status").eq("id", parsed.data.staff_id).eq("company_id", parsed.data.company_id).maybeSingle();
+  const { data: staff, error: staffError } = await supabase.from("staff").select("id,company_id,branch_id,shift_start,shift_end,scheduled_shifts,grace_minutes,status").eq("id", parsed.data.staff_id).eq("company_id", parsed.data.company_id).maybeSingle();
   if (staffError) return response({ error: staffError.message }, 500);
   if (!staff || staff.status !== "active") return response({ error: "Active staff member not found." }, 404);
+  const weekday = new Date(`${parsed.data.date}T00:00:00Z`).getUTCDay();
+  const configured = Array.isArray(staff.scheduled_shifts) ? staff.scheduled_shifts as { start: string; end: string; day?: number }[] : [];
+  const shifts = configured.some(shift => shift.day !== undefined)
+    ? configured.filter(shift => shift.day === weekday).map(({ start, end }) => ({ start: start.slice(0, 5), end: end.slice(0, 5) }))
+    : configured.length ? configured.map(({ start, end }) => ({ start: start.slice(0, 5), end: end.slice(0, 5) }))
+      : [{ start: staff.shift_start.slice(0, 5), end: staff.shift_end.slice(0, 5) }];
+  if (parsed.data.shift_number > shifts.length) return response({ error: shifts.length ? "Choose a scheduled shift for this staff member." : "This staff member has no shift scheduled on that date." }, 400);
+  const selectedShift = shifts[parsed.data.shift_number - 1];
+  const overnight = selectedShift.end <= selectedShift.start;
   const checkIn = parsed.data.check_in_at ? new Date(`${parsed.data.date}T${parsed.data.check_in_at}:00+03:00`) : null;
-  const checkOut = parsed.data.check_out_at ? new Date(`${parsed.data.date}T${parsed.data.check_out_at}:00+03:00`) : null;
+  const checkOutDate = overnight && parsed.data.check_in_at && parsed.data.check_out_at && parsed.data.check_out_at < parsed.data.check_in_at
+    ? new Date(new Date(`${parsed.data.date}T00:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10)
+    : parsed.data.date;
+  const checkOut = parsed.data.check_out_at ? new Date(`${checkOutDate}T${parsed.data.check_out_at}:00+03:00`) : null;
   if (!checkIn && checkOut) return response({ error: "Check-in time is required when check-out is provided." }, 400);
   if (checkIn && checkOut && checkOut < checkIn) return response({ error: "Check-out must be after check-in." }, 400);
-  const shifts = Array.isArray(staff.scheduled_shifts) && staff.scheduled_shifts.length ? staff.scheduled_shifts as { start: string; end: string }[] : [{ start: staff.shift_start.slice(0, 5), end: "17:00" }];
-  if (parsed.data.shift_number > shifts.length) return response({ error: "Choose a scheduled shift for this staff member." }, 400);
   const [shiftHour, shiftMinute] = shifts[parsed.data.shift_number - 1].start.split(":").map(Number);
   const shift = new Date(`${parsed.data.date}T${String(shiftHour).padStart(2, "0")}:${String(shiftMinute).padStart(2, "0")}:00+03:00`);
   const lateMinutes = checkIn ? Math.max(0, Math.floor((checkIn.getTime() - shift.getTime()) / 60000) - staff.grace_minutes) : 0;
