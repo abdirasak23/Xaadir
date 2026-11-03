@@ -29,6 +29,7 @@ export const staffSchema = z.object({
   shift_start: timeSchema,
   shift_end: timeSchema,
   scheduled_shifts: z.array(shiftSchema).min(1).max(56).optional(),
+  check_in_method: z.enum(["biometric", "selfie"]).default("biometric"),
   monthly_salary: z.number().finite().min(0).max(1_000_000_000).default(0),
   annual_leave_days: z.number().int().min(0).max(365).default(21),
 }).superRefine((staff, context) => {

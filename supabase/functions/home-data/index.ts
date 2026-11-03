@@ -107,6 +107,7 @@ type StaffRow = {
   branch_id: string | null;
   monthly_salary: number | string | null;
   scheduled_shifts: unknown;
+  check_in_method: "biometric" | "selfie";
   branches: { name: string } | { name: string }[] | null;
 };
 
@@ -178,7 +179,7 @@ async function loadCaller(request: Request): Promise<StaffRow> {
   const { data: staff, error } = await supabase
     .from("staff")
     .select(
-      "id,full_name,job_title,status,must_change_password,created_at,shift_start,shift_end,grace_minutes,company_id,branch_id,monthly_salary,scheduled_shifts,branches(name)",
+      "id,full_name,job_title,status,must_change_password,created_at,shift_start,shift_end,grace_minutes,company_id,branch_id,monthly_salary,scheduled_shifts,check_in_method,branches(name)",
     )
     .eq("auth_user_id", userData.user.id)
     .maybeSingle();
@@ -537,6 +538,7 @@ Deno.serve(async (request) => {
         shifts: todayShifts.map(({ number, startMin, endMin }) => ({ number, start_min: startMin, end_min: endMin })),
         grace_minutes: staff.grace_minutes,
       },
+      check_in_method: staff.check_in_method ?? "biometric",
       today: todayBlock(rows.get(today)),
       month,
       chart: { shift_start_min: todayShifts[0]?.startMin ?? null, days: chartDays },
