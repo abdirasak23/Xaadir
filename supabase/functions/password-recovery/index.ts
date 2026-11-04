@@ -7,12 +7,18 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const issueSchema = z.object({ action: z.literal("issue-hr-code"), company_id: z.string().uuid() });
+const issueStaffSchema = z.object({
+  action: z.literal("issue-staff-code"),
+  company_id: z.string().uuid(),
+  staff_id: z.string().uuid(),
+  issued_by: z.string().uuid(),
+});
 const resetSchema = z.object({
   action: z.literal("reset"), account_type: z.enum(["hr", "staff"]),
   email: z.string().trim().email().max(254), code: z.string().trim().min(6).max(128),
   password: z.string().min(12).max(128), password_confirm: z.string().min(12).max(128),
 });
-const schema = z.discriminatedUnion("action", [issueSchema, resetSchema]);
+const schema = z.discriminatedUnion("action", [issueSchema, issueStaffSchema, resetSchema]);
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" },
 });
@@ -26,6 +32,13 @@ function randomCode() {
   const bytes = new Uint8Array(24);
   crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function randomStaffCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint8Array(10);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, byte => alphabet[byte % alphabet.length]).join("");
 }
 
 Deno.serve(async request => {
@@ -62,6 +75,42 @@ Deno.serve(async request => {
     return response({ code, expires_at: expiresAt, email: membership.email, full_name: membership.full_name });
   }
 
+  if (parsed.data.action === "issue-staff-code") {
+    const input = parsed.data;
+    const { data: issuer, error: issuerError } = await supabase.from("company_admins")
+      .select("auth_user_id,companies!inner(status)")
+      .eq("company_id", input.company_id).eq("auth_user_id", input.issued_by).maybeSingle();
+    const issuerCompany = issuer ? (Array.isArray(issuer.companies) ? issuer.companies[0] : issuer.companies) : null;
+    if (issuerError || !issuer || issuerCompany?.status !== "active") {
+      return response({ error: "Only an active HR account for this company can issue staff reset codes." }, 403);
+    }
+    const { data: staff, error: staffError } = await supabase.from("staff")
+      .select("id,auth_user_id,email,full_name,status,invite_status")
+      .eq("id", input.staff_id).eq("company_id", input.company_id).maybeSingle();
+    if (staffError) return response({ error: "Could not load staff account." }, 500);
+    if (!staff || !staff.auth_user_id || staff.status !== "active" || staff.invite_status !== "accepted") {
+      return response({ error: "An active staff account with an accepted invite is required." }, 400);
+    }
+    const code = randomStaffCode();
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    const { error: invalidateError } = await supabase.from("staff_password_recovery_codes")
+      .update({ used_at: new Date().toISOString() }).eq("staff_id", staff.id).is("used_at", null);
+    if (invalidateError) return response({ error: "Could not issue recovery code." }, 500);
+    const { error: insertError } = await supabase.from("staff_password_recovery_codes").insert({
+      staff_id: staff.id,
+      auth_user_id: staff.auth_user_id,
+      code_hash: await sha256(code.toUpperCase()),
+      expires_at: expiresAt,
+      created_by: input.issued_by,
+    });
+    if (insertError) return response({ error: "Could not create recovery code." }, 500);
+    const { error: auditError } = await supabase.from("audit_log").insert({
+      actor: `hr:${input.issued_by}`, action: "staff.password_recovery_issued", target: staff.id,
+    });
+    if (auditError) return response({ error: "Could not record recovery audit." }, 500);
+    return response({ code, expires_at: expiresAt, email: staff.email, full_name: staff.full_name });
+  }
+
   const input = parsed.data;
   if (input.password !== input.password_confirm || !/[a-z]/.test(input.password) || !/[A-Z]/.test(input.password) || !/\d/.test(input.password)) {
     return response({ error: "Password confirmation or password requirements are not met." }, 400);
@@ -86,11 +135,19 @@ Deno.serve(async request => {
       if (!consumed) userId = null;
     }
   } else {
-    const { data: staff } = await supabase.from("staff").select("id,auth_user_id,invite_code,company_id")
+    const { data: staff } = await supabase.from("staff").select("id,auth_user_id")
       .ilike("email", email).eq("status", "active").eq("invite_status", "accepted").maybeSingle();
-    if (staff?.auth_user_id && staff.invite_code && staff.invite_code.toUpperCase() === input.code.toUpperCase()) {
-      userId = staff.auth_user_id;
-      staffId = staff.id;
+    if (staff?.auth_user_id) {
+      const { data: consumed, error } = await supabase.rpc("consume_staff_password_recovery_code", {
+        p_staff_id: staff.id,
+        p_auth_user_id: staff.auth_user_id,
+        p_code_hash: await sha256(input.code.toUpperCase()),
+      });
+      if (error) return response({ error: "Recovery service is not configured." }, 503);
+      if (consumed) {
+        userId = staff.auth_user_id;
+        staffId = staff.id;
+      }
     }
   }
   if (!userId) return response({ error: "Invalid recovery request." }, 400);
@@ -101,7 +158,7 @@ Deno.serve(async request => {
     const { error } = await supabase.from("company_admins").update({ must_change_password: false }).eq("auth_user_id", userId);
     if (error) return response({ error: "Could not update account status." }, 500);
   } else if (staffId) {
-    const { error } = await supabase.from("staff").update({ invite_code: null, invite_expires_at: null, must_change_password: false }).eq("id", staffId);
+    const { error } = await supabase.from("staff").update({ must_change_password: false }).eq("id", staffId);
     if (error) return response({ error: "Could not finish staff recovery." }, 500);
   }
   const { error: auditError } = await supabase.from("audit_log").insert({
