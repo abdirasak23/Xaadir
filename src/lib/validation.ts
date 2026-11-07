@@ -63,7 +63,8 @@ export const manualAttendanceSchema = z.object({
   staff_id: uuidSchema,
   date: dateSchema,
   shift_number: z.number().int().min(1).max(8).default(1),
+  full_day_present: z.boolean().optional().default(false),
   check_in_at: timeSchema.or(z.literal("")),
   check_out_at: timeSchema.or(z.literal("")),
-  reason: z.string().trim().min(1).max(500),
+  reason: z.string().trim().max(500).optional().default(""),
 });

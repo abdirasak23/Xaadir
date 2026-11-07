@@ -8,9 +8,10 @@ const schema = z.object({
     return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value;
   }),
   shift_number: z.number().int().min(1).max(8).default(1),
+  full_day_present: z.boolean().default(false),
   check_in_at: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).or(z.literal("")),
   check_out_at: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).or(z.literal("")),
-  reason: z.string().trim().min(1).max(500),
+  reason: z.string().trim().max(500).optional().default(""),
 });
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } }); }
 
@@ -30,6 +31,42 @@ Deno.serve(async (request) => {
     ? configured.filter(shift => shift.day === weekday).map(({ start, end }) => ({ start: start.slice(0, 5), end: end.slice(0, 5) }))
     : configured.length ? configured.map(({ start, end }) => ({ start: start.slice(0, 5), end: end.slice(0, 5) }))
       : [{ start: staff.shift_start.slice(0, 5), end: staff.shift_end.slice(0, 5) }];
+  if (parsed.data.full_day_present) {
+    if (!shifts.length) return response({ error: "This staff member has no shift scheduled on that date." }, 400);
+    const { data: existing, error: existingError } = await supabase.from("attendance").select("*")
+      .eq("staff_id", staff.id).eq("date", parsed.data.date);
+    if (existingError) return response({ error: existingError.message }, 500);
+    const byShift = new Map((existing ?? []).map(row => [row.shift_number ?? 1, row]));
+    if (shifts.some((_, index) => ["leave", "sick", "holiday"].includes(byShift.get(index + 1)?.status ?? ""))) {
+      return response({ error: "This date already has leave, sick, or holiday recorded. Review that entry before marking the day present." }, 409);
+    }
+    const entries = shifts.flatMap((_, index) => {
+      const shiftNumber = index + 1;
+      const scheduledShift = shifts[index];
+      const checkIn = new Date(`${parsed.data.date}T${scheduledShift.start}:00+03:00`);
+      const overnight = scheduledShift.end <= scheduledShift.start;
+      const checkOutDate = overnight
+        ? new Date(new Date(`${parsed.data.date}T00:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10)
+        : parsed.data.date;
+      const checkOut = new Date(`${checkOutDate}T${scheduledShift.end}:00+03:00`);
+      return [{
+        staff_id: staff.id, branch_id: staff.branch_id, date: parsed.data.date,
+        shift_number: shiftNumber, check_in_at: checkIn.toISOString(), check_out_at: checkOut.toISOString(),
+        status: "present", late_minutes: 0, source: "manual", created_by: "admin", note: parsed.data.reason || null,
+      }];
+    });
+    let saved: any[] = [];
+    if (entries.length) {
+      const { data, error } = await supabase.from("attendance").upsert(entries, { onConflict: "staff_id,date,shift_number" }).select();
+      if (error) return response({ error: error.message }, 400);
+      saved = data ?? [];
+    }
+    for (const row of saved) {
+      const { error: auditError } = await supabase.from("audit_log").insert({ actor: "admin", action: "attendance.manual_full_day", target: row.id });
+      if (auditError) return response({ error: auditError.message }, 500);
+    }
+    return response({ status: "present", shift_count: shifts.length, updated_count: saved.length });
+  }
   if (parsed.data.shift_number > shifts.length) return response({ error: shifts.length ? "Choose a scheduled shift for this staff member." : "This staff member has no shift scheduled on that date." }, 400);
   const selectedShift = shifts[parsed.data.shift_number - 1];
   const overnight = selectedShift.end <= selectedShift.start;
@@ -47,7 +84,7 @@ Deno.serve(async (request) => {
     staff_id: staff.id, branch_id: staff.branch_id, date: parsed.data.date, shift_number: parsed.data.shift_number,
     check_in_at: checkIn?.toISOString() ?? null, check_out_at: checkOut?.toISOString() ?? null,
     status: !checkIn ? "absent" : lateMinutes > 0 ? "late" : "present",
-    late_minutes: lateMinutes, source: "manual", created_by: "admin", note: parsed.data.reason,
+    late_minutes: lateMinutes, source: "manual", created_by: "admin", note: parsed.data.reason || null,
   };
   const { data, error } = await supabase.from("attendance").upsert(record, { onConflict: "staff_id,date,shift_number" }).select().single();
   if (error) return response({ error: error.message }, 400);
