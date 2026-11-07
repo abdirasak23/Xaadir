@@ -1,5 +1,9 @@
 .next/
+.open-next/
+.wrangler/
 node_modules/
 .env*
 !.env.example
+.dev.vars*
+!.dev.vars.example
 npm-debug.log*

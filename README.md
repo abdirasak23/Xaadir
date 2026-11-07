@@ -59,6 +59,18 @@ Render does not read your local `.env.local` file. In the Render service, open *
 
 Save the environment changes and redeploy the Render service. Never add the admin password or service-role key to a `NEXT_PUBLIC_` variable, commit them, or share them in chat. `npm run setup-admin` creates a local `.env.local`; it does not configure Render.
 
+## Deploying to Cloudflare Workers
+
+This repository uses `@opennextjs/cloudflare` to adapt the existing Next.js app to Workers. Local development remains `npm run dev`. In **Workers & Pages → xaadir → Settings → Builds**, configure:
+
+- Build command: `npx @opennextjs/cloudflare build`
+- Deploy command: `npx @opennextjs/cloudflare deploy`
+- Preview command: `npx @opennextjs/cloudflare preview`
+
+Add the application variables to both Workers Builds **Build variables and secrets** and the Worker’s runtime **Variables and Secrets**. Use plain variables for `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `ADMIN_USERNAME`. Use encrypted secrets for `ADMIN_PASSWORD_HASH`, `ADMIN_SESSION_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, `EDGE_FUNCTION_SECRET`, and `QR_SIGNING_SECRET`. The public Supabase URL/key are inlined during Next.js compilation; all private values must remain server-side. Never commit `.env.local` or `.dev.vars`.
+
+The Worker is named `xaadir`; `wrangler.jsonc` configures its OpenNext entry point, static assets, `nodejs_compat`, and deployment-safe `keep_vars`. Next Image optimization is disabled so existing local and remote images render without requiring a paid Cloudflare Images binding. The static images still use Cloudflare’s asset delivery.
+
 ## Leave, sick days, and holidays
 
 1. Run [`supabase/leave.sql`](./supabase/leave.sql) in the Supabase SQL Editor after `schema.sql`. It enables RLS on the new tables, grants access only to `service_role`, and adds attendance statuses and the annual leave allowance field.

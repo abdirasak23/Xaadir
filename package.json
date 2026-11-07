@@ -7,6 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint src",
+    "cf:build": "npx @opennextjs/cloudflare build",
+    "cf:deploy": "npm run cf:build && npx @opennextjs/cloudflare deploy",
+    "cf:preview": "npm run cf:build && npx @opennextjs/cloudflare preview",
     "hash-password": "node scripts/hash-password.mjs",
     "setup-admin": "node scripts/setup-admin.mjs"
   },
@@ -24,6 +27,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "1.20.13",
     "@types/leaflet": "^1.9.16",
     "@types/node": "^22.13.4",
     "@types/qrcode": "^1.5.5",
@@ -34,7 +38,8 @@
     "eslint-config-next": "^15.5.28",
     "postcss": "^8.5.32",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "wrangler": "^4.52.0"
   },
   "overrides": {
     "postcss": "^8.5.32"

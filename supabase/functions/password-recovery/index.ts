@@ -44,9 +44,15 @@ function randomStaffCode() {
 Deno.serve(async request => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: cors });
   const secret = Deno.env.get("EDGE_FUNCTION_SECRET");
-  if (!secret || request.headers.get("x-admin-secret") !== secret) return response({ error: "Unauthorized." }, 401);
   const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return response({ error: "Invalid recovery request." }, 400);
+  // Staff recovery is safe for the mobile client to call directly: it is gated
+  // by a short-lived, single-use code and rate limiting. Admin issuance and HR
+  // recovery stay behind the server-only x-admin-secret.
+  const publicStaffReset = parsed.data.action === "reset" && parsed.data.account_type === "staff";
+  if (!publicStaffReset && (!secret || request.headers.get("x-admin-secret") !== secret)) {
+    return response({ error: "Unauthorized." }, 401);
+  }
   const url = Deno.env.get("SUPABASE_URL");
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!url || !serviceKey) return response({ error: "Recovery service is not configured." }, 500);
@@ -116,7 +122,7 @@ Deno.serve(async request => {
     return response({ error: "Password confirmation or password requirements are not met." }, 400);
   }
   const email = input.email.toLowerCase();
-  const keyHash = await sha256(`${input.account_type}:${email}:${secret}`);
+  const keyHash = await sha256(`${input.account_type}:${email}:${secret ?? serviceKey}`);
   const { data: withinLimit, error: rateError } = await supabase.rpc("take_password_recovery_attempt", { p_key_hash: keyHash });
   if (rateError) return response({ error: "Recovery service is not configured." }, 503);
   if (!withinLimit) return response({ error: "Recovery is temporarily unavailable." }, 429);

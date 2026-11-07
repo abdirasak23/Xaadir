@@ -16,9 +16,25 @@ supabase functions deploy invite-staff
 supabase functions deploy qr-token
 supabase functions deploy manual-attendance
 supabase functions deploy checkin
+supabase functions deploy password-recovery
 ```
 
 The admin functions require the `x-admin-secret` header. `qr-token` is public but requires the branch's live QR key in its request body. `checkin` is intended for the Flutter app and authenticates the staff access token itself.
+
+`password-recovery` must keep **Verify JWT enabled**. HR code issuance and HR recovery require the server-only `x-admin-secret`. Staff password reset can be called directly from Flutter through `Supabase.functions.invoke("password-recovery", ...)` using the normal Supabase project URL and anon/publishable key; never put `EDGE_FUNCTION_SECRET` or a service-role key in Flutter. Send this body:
+
+```json
+{
+  "action": "reset",
+  "account_type": "staff",
+  "email": "staff@example.com",
+  "code": "CODE_ISSUED_BY_HR",
+  "password": "NewPassword123",
+  "password_confirm": "NewPassword123"
+}
+```
+
+The staff code is generated in the HR panel, expires after 30 minutes, and is single-use. Run `supabase/staff-password-recovery.sql` before enabling this flow. The function validates the code, applies the recovery rate limit, updates the password using the service role, and returns `{ "ok": true }` on success.
 
 For dashboard-only deployment, create/update each function using the matching `supabase/functions/<name>/index.ts` file and configure the same project secrets above.
 
