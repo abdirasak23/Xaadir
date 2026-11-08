@@ -20,6 +20,7 @@ const links = [
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const whatsappUrl = `https://wa.me/252906753517?text=${encodeURIComponent("Hi Xaadir, I need help with my workspace.")}`;
@@ -44,10 +45,19 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           <span className="min-w-0 flex-1"><span className="block text-xs font-semibold">Need help?</span><span className="mt-0.5 block text-[10px] text-neutral-500">Chat with Xaadir support</span></span>
           <HugeiconsIcon icon={ArrowUpRight01Icon} size={15} className="text-neutral-400" />
         </a>
-        <div className="flex items-center gap-3 rounded-xl px-2 py-2">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black text-xs font-semibold text-white">A</div>
-          <div className="min-w-0 flex-1"><p className="text-[9px] font-semibold uppercase tracking-wider text-neutral-400">Account</p><p className="truncate text-xs font-semibold">Workspace admin</p></div>
-          <button onClick={logout} aria-label="Log out" title="Log out" className="rounded-lg p-2 text-neutral-500 hover:bg-neutral-100 hover:text-black"><HugeiconsIcon icon={Logout01Icon} size={18} /></button>
+        <div className="relative">
+          {accountMenuOpen && <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-black/[.08] bg-white p-1.5 shadow-xl">
+            <Link href="/hr-team" onClick={() => { setAccountMenuOpen(false); setOpen(false); }} className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100 hover:text-black">
+              <HugeiconsIcon icon={UserGroupIcon} size={17} /> Manage HR access
+            </Link>
+          </div>}
+          <div className="flex items-center gap-2 rounded-xl px-1 py-1">
+            <button onClick={() => setAccountMenuOpen(value => !value)} aria-expanded={accountMenuOpen} aria-label="Open account menu" className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1 text-left hover:bg-neutral-50">
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black text-xs font-semibold text-white">A</div>
+              <div className="min-w-0"><p className="text-[9px] font-semibold uppercase tracking-wider text-neutral-400">Account</p><p className="truncate text-xs font-semibold">Workspace admin</p></div>
+            </button>
+            <button onClick={logout} aria-label="Log out" title="Log out" className="rounded-lg p-2 text-neutral-500 hover:bg-neutral-100 hover:text-black"><HugeiconsIcon icon={Logout01Icon} size={18} /></button>
+          </div>
         </div>
       </div>
     </aside>

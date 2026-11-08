@@ -7,66 +7,180 @@ import { localDateInTimezone } from "../../shared/attendance-rules";
 type Shift = { start: string; end: string; day?: number };
 type Staff = { id: string; full_name: string; staff_code: string; status: string; shift_start?: string; shift_end?: string; scheduled_shifts?: Shift[] };
 type AttendanceRow = { staff_id: string; shift_number?: number; check_in_at: string | null; check_out_at: string | null; status: string; note?: string | null };
+type RosterStatus = "present" | "absent";
 const today = localDateInTimezone();
-const shiftsFor = (person?: Staff, day?: number): Shift[] => {
-  if (!person) return [{ start: "09:00", end: "17:00" }];
+const weekDayName = (day: number) => ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day];
+const shiftsFor = (person: Staff, day: number): Shift[] => {
   const configured = person.scheduled_shifts ?? [];
   if (configured.some(shift => shift.day !== undefined)) return configured.filter(shift => shift.day === day).map(({ start, end }) => ({ start: start.slice(0, 5), end: end.slice(0, 5) }));
   return configured.length ? configured.map(({ start, end }) => ({ start: start.slice(0, 5), end: end.slice(0, 5) })) : [{ start: person.shift_start?.slice(0, 5) ?? "09:00", end: person.shift_end?.slice(0, 5) ?? "17:00" }];
 };
-const clock = (value: string | null) => value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+const attendedStatuses = new Set(["present", "late", "manual"]);
 
 export function ManualAttendance() {
-  const [staff, setStaff] = useState<Staff[]>([]), [records, setRecords] = useState<AttendanceRow[]>([]);
-  const [staffId, setStaffId] = useState(""), [shiftNumber, setShiftNumber] = useState(1), [date, setDate] = useState(today);
-  const [fullDayPresent, setFullDayPresent] = useState(false);
-  const [checkIn, setCheckIn] = useState(""), [checkOut, setCheckOut] = useState(""), [reason, setReason] = useState("");
-  const [mode, setMode] = useState<"attendance" | "leave">("attendance"), [leaveKind, setLeaveKind] = useState<"leave" | "sick">("leave");
-  const [error, setError] = useState(""), [notice, setNotice] = useState(""), [busy, setBusy] = useState(false);
-  const selectedStaff = staff.find(person => person.id === staffId);
-  const selectedShifts = useMemo(() => shiftsFor(selectedStaff, new Date(`${date}T00:00:00Z`).getUTCDay()), [selectedStaff, date]);
+  const [staff, setStaff] = useState<Staff[]>([]);
+  const [records, setRecords] = useState<AttendanceRow[]>([]);
+  const [date, setDate] = useState(today);
+  const [scope, setScope] = useState<"all_shifts" | "specific_shift">("all_shifts");
+  const [shiftNumber, setShiftNumber] = useState(1);
+  const [checkIn, setCheckIn] = useState("");
+  const [checkOut, setCheckOut] = useState("");
+  const [draft, setDraft] = useState<Record<string, RosterStatus>>({});
+  const [leaveStaffId, setLeaveStaffId] = useState("");
+  const [leaveKind, setLeaveKind] = useState<"leave" | "sick">("leave");
+  const [leaveReason, setLeaveReason] = useState("");
+  const [tab, setTab] = useState<"roster" | "leave">("roster");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [staffLoading, setStaffLoading] = useState(true);
+  const dayNumber = new Date(`${date}T00:00:00Z`).getUTCDay();
 
   const loadRecords = useCallback(async () => {
-    const response = await fetch(`/api/attendance?from=${date}&to=${date}`);
+    const response = await fetch(`/api/attendance?from=${date}&to=${date}`, { cache: "no-store" });
     const data = await response.json();
-    if (response.ok && Array.isArray(data)) setRecords(data);
+    if (!response.ok) throw new Error(data.error ?? "Could not load attendance records.");
+    if (Array.isArray(data)) setRecords(data);
   }, [date]);
-  useEffect(() => {
-    void fetch("/api/staff").then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? "Could not load staff."); const active = data.filter((person: Staff) => person.status === "active"); setStaff(active); if (active[0]) setStaffId(active[0].id); }).catch(reason => setError(reason instanceof Error ? reason.message : "Could not load staff."));
-  }, []);
-  useEffect(() => { void loadRecords().catch(() => setRecords([])); }, [loadRecords]);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    void fetch("/api/staff").then(async response => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not load staff.");
+      const active = data.filter((person: Staff) => person.status === "active");
+      setStaff(active);
+      if (active[0]) setLeaveStaffId(active[0].id);
+    }).catch(reason => setError(reason instanceof Error ? reason.message : "Could not load staff.")).finally(() => setStaffLoading(false));
+  }, []);
+  useEffect(() => {
+    setDraft({});
+    void loadRecords().catch(reason => setError(reason instanceof Error ? reason.message : "Could not load attendance records."));
+  }, [loadRecords]);
+
+  const roster = useMemo(() => staff.map(person => ({ person, shifts: shiftsFor(person, dayNumber) }))
+    .filter(item => scope === "all_shifts" ? item.shifts.length > 0 : item.shifts.length >= shiftNumber), [staff, dayNumber, scope, shiftNumber]);
+
+  function savedStatus(person: Staff, shifts: Shift[]): RosterStatus | "mixed" | "leave" | "sick" | "holiday" | "" {
+    const relevant = scope === "all_shifts"
+      ? shifts.map((_, index) => records.find(record => record.staff_id === person.id && (record.shift_number ?? 1) === index + 1)).filter(Boolean) as AttendanceRow[]
+      : records.filter(record => record.staff_id === person.id && (record.shift_number ?? 1) === shiftNumber);
+    if (!relevant.length) return "";
+    if (relevant.some(record => record.status === "leave" || record.status === "sick" || record.status === "holiday")) {
+      return relevant.find(record => record.status === "leave" || record.status === "sick" || record.status === "holiday")!.status as "leave" | "sick" | "holiday";
+    }
+    const presentCount = relevant.filter(record => attendedStatuses.has(record.status)).length;
+    const absentCount = relevant.filter(record => record.status === "absent").length;
+    if (presentCount && absentCount) return "mixed";
+    if (presentCount) return "present";
+    if (absentCount === (scope === "all_shifts" ? shifts.length : 1)) return "absent";
+    return "";
+  }
+
+  function statusFor(person: Staff, shifts: Shift[]) {
+    return draft[person.id] ?? savedStatus(person, shifts);
+  }
+
+  async function saveRoster() {
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const entries = roster.flatMap(({ person }) => {
+        const status = draft[person.id];
+        return status ? [{ staff_id: person.id, status }] : [];
+      });
+      if (!entries.length) throw new Error("Mark at least one staff member Present or Absent before saving.");
+      const response = await fetch("/api/attendance", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save-roster", date, scope, shift_number: shiftNumber, check_in_at: checkIn, check_out_at: checkOut, entries }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Could not save the daily attendance roster.");
+      setNotice(`Saved attendance for ${body.saved_staff_count} staff across ${body.saved_shift_count} shift records.`);
+      setDraft({});
+      await loadRecords();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not save the daily attendance roster.");
+    } finally { setBusy(false); }
+  }
+
+  async function saveLeave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(""); setNotice("");
     try {
-      const payload = mode === "attendance"
-        ? { staff_id: staffId, date, shift_number: shiftNumber, full_day_present: fullDayPresent, check_in_at: checkIn, check_out_at: checkOut, reason }
-        : { action: "convert", staff_id: staffId, date, new_status: leaveKind, leave_type: leaveKind === "sick" ? "sick" : "other", reason };
-      const response = await fetch("/api/attendance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const response = await fetch("/api/attendance", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "convert", staff_id: leaveStaffId, date, new_status: leaveKind, leave_type: leaveKind === "sick" ? "sick" : "other", reason: leaveReason }),
+      });
       const body = await response.json();
-      if (!response.ok) setError(body.error ?? "Attendance record could not be saved.");
-      else { setNotice(mode === "attendance" ? fullDayPresent ? `Full-day presence recorded across ${body.shift_count ?? selectedShifts.length} shifts using their scheduled times.` : `Shift ${shiftNumber} saved as ${body.status}${body.late_minutes ? `, ${body.late_minutes} minutes late` : ""}.` : `${leaveKind === "sick" ? "Sick day" : "Leave"} recorded for ${date}.`); setReason(""); await loadRecords(); }
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Attendance record could not be saved."); }
+      if (!response.ok) throw new Error(body.error ?? "Could not record leave.");
+      setNotice(`${leaveKind === "sick" ? "Sick day" : "Leave"} recorded for ${date}.`);
+      setLeaveReason("");
+      await loadRecords();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not record leave."); }
     finally { setBusy(false); }
   }
 
+  const markedPresent = roster.filter(({ person }) => draft[person.id] === "present").length;
+  const markedAbsent = roster.filter(({ person }) => draft[person.id] === "absent").length;
+  const excludedCount = roster.filter(({ person, shifts }) => ["leave", "sick", "holiday"].includes(statusFor(person, shifts))).length;
+  const pendingCount = roster.length - markedPresent - markedAbsent - excludedCount;
+  const maxShift = Math.max(1, ...staff.map(person => shiftsFor(person, dayNumber).length));
+
   return <>
-    <PageHeading eyebrow="Attendance" title="Manual entry" description="Record each shift separately. Late time is calculated after the staff member’s five-minute grace period." action={<a href="/attendance" className="text-sm font-semibold text-forest hover:underline">← Back to dashboard</a>} />
-    <Card className="mb-6 min-w-0 p-0"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-100 p-5"><div><h2 className="text-sm font-semibold">Staff attendance</h2><p className="mt-1 text-xs text-neutral-500">Each scheduled shift is shown with its own check-in and check-out.</p></div><label className="text-[11px] font-medium text-neutral-500">Date<Input className="mt-1" type="date" value={date} onChange={event => setDate(event.target.value)} /></label></div><div className="overflow-x-auto"><table className="w-full min-w-[680px] text-left text-xs"><thead className="bg-neutral-50 text-[10px] uppercase tracking-wide text-neutral-400"><tr>{["Staff member", "Scheduled shift", "Check-in", "Check-out", "Status"].map(label => <th key={label} className="px-5 py-3 font-medium">{label}</th>)}</tr></thead><tbody className="divide-y divide-neutral-100">{staff.flatMap(person => shiftsFor(person, new Date(`${date}T00:00:00Z`).getUTCDay()).map((shift, index) => { const record = records.find(item => item.staff_id === person.id && (item.shift_number ?? 1) === index + 1); const chip = record?.status === "late" ? "bg-amber-50 text-amber-700" : record?.status === "absent" ? "bg-rose-50 text-rose-700" : record?.status === "leave" || record?.status === "sick" ? "bg-violet-50 text-violet-700" : record?.status === "holiday" ? "bg-neutral-100 text-neutral-700" : record ? "bg-emerald-50 text-emerald-700" : "bg-neutral-100 text-neutral-500"; return <tr key={`${person.id}-${index}`}><td className="px-5 py-3.5"><p className="font-medium">{person.full_name}</p><p className="mt-0.5 text-[10px] text-neutral-400">{person.staff_code}</p></td><td className="px-5 py-3.5 font-medium tabular-nums">{shift.start}–{shift.end}</td><td className="px-5 py-3.5 tabular-nums">{clock(record?.check_in_at ?? null)}</td><td className="px-5 py-3.5 tabular-nums">{clock(record?.check_out_at ?? null)}</td><td className="px-5 py-3.5"><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${chip}`}>{record?.status ?? "Not recorded"}</span>{record?.note && <p className="mt-1 max-w-48 truncate text-[10px] text-neutral-400">{record.note}</p>}</td></tr>; }))}</tbody></table></div></Card>
-    <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-      <Card><h2 className="text-lg font-bold">Record attendance</h2><p className="mb-6 mt-1 text-sm text-slate-500">Manual records are stored against the chosen scheduled shift.</p>
-        {error && <div className="mb-4"><Notice error>{error}</Notice></div>}{notice && <div className="mb-4"><Notice>{notice}</Notice></div>}
-        <div className="mb-5 grid grid-cols-2 rounded-xl bg-neutral-100 p-1"><button type="button" onClick={() => setMode("attendance")} className={`rounded-lg px-3 py-2 text-xs font-medium ${mode === "attendance" ? "bg-white text-black shadow-sm" : "text-neutral-500"}`}>Check-in / out</button><button type="button" onClick={() => setMode("leave")} className={`rounded-lg px-3 py-2 text-xs font-medium ${mode === "leave" ? "bg-white text-black shadow-sm" : "text-neutral-500"}`}>Mark leave / sick</button></div>
-        <form className="space-y-5" onSubmit={submit}>
-          <Field label="Staff member"><select required value={staffId} onChange={event => { setStaffId(event.target.value); setShiftNumber(1); }} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm"><option value="">Select staff member</option>{staff.map(person => <option key={person.id} value={person.id}>{person.full_name} · {person.staff_code}</option>)}</select></Field>
-          {mode === "attendance" && <div className="space-y-3"><div className="grid grid-cols-2 rounded-xl bg-neutral-100 p-1"><button type="button" onClick={() => setFullDayPresent(false)} className={`rounded-lg px-3 py-2 text-xs font-medium ${!fullDayPresent ? "bg-white text-black shadow-sm" : "text-neutral-500"}`}>One shift</button><button type="button" onClick={() => setFullDayPresent(true)} className={`rounded-lg px-3 py-2 text-xs font-medium ${fullDayPresent ? "bg-white text-black shadow-sm" : "text-neutral-500"}`}>Full day present</button></div>{fullDayPresent ? <p className="rounded-xl bg-emerald-50 px-3.5 py-3 text-xs leading-5 text-emerald-800">Records all {selectedShifts.length} scheduled shift{selectedShifts.length === 1 ? "" : "s"} as present, using each shift’s scheduled start and end as check-in and checkout times. This replaces any existing attendance times for those shifts.</p> : <Field label="Scheduled shift"><select value={shiftNumber} onChange={event => setShiftNumber(Number(event.target.value))} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm">{selectedShifts.map((shift, index) => <option key={index} value={index + 1}>Shift {index + 1} · {shift.start}–{shift.end}</option>)}</select></Field>}</div>}
-          <Field label="Date"><Input type="date" required value={date} onChange={event => setDate(event.target.value)} /></Field>
-          {mode === "attendance" ? fullDayPresent ? null : <div className="grid gap-4 sm:grid-cols-2"><Field label="Check-in time (optional)"><Input type="time" value={checkIn} onChange={event => setCheckIn(event.target.value)} /></Field><Field label="Check-out time (optional)"><Input type="time" value={checkOut} onChange={event => setCheckOut(event.target.value)} /></Field></div> : <Field label="Record as"><select value={leaveKind} onChange={event => setLeaveKind(event.target.value as "leave" | "sick")} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm"><option value="leave">Leave</option><option value="sick">Sick</option></select></Field>}
-          <Field label={mode === "attendance" && fullDayPresent ? "Reason (optional)" : "Reason (required)"}><textarea required={!(mode === "attendance" && fullDayPresent)} minLength={mode === "attendance" && fullDayPresent ? undefined : 1} maxLength={500} rows={4} value={reason} onChange={event => setReason(event.target.value)} placeholder={mode === "attendance" && fullDayPresent ? "Optional note for this full-day record..." : "Explain why this record is being added or corrected..."} className="w-full resize-y rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-forest focus:ring-2 focus:ring-emerald-100" /></Field>
-          <Button disabled={busy || !staffId || (mode === "attendance" && fullDayPresent && selectedShifts.length === 0)}>{busy ? "Saving..." : mode === "attendance" ? fullDayPresent ? "Record full day present" : "Save manual attendance" : "Save leave / sick day"}</Button>
-        </form>
-      </Card>
-      <Card className="bg-emerald-950 text-white"><span className="text-2xl">✦</span><h2 className="mt-4 text-lg font-bold">Consistent calculations</h2><p className="mt-2 text-sm leading-6 text-emerald-50/75">Each QR scan checks out the open shift. The next scan begins the next scheduled shift. Payroll applies the 5-minute grace period to every shift.</p><div className="mt-5 border-t border-white/10 pt-4 text-xs leading-5 text-emerald-50/60">Every manual update is tagged as manual and writes an audit entry.</div></Card>
+    <PageHeading eyebrow="Attendance" title="Manual entry" description="Set attendance for the whole team in one step, or correct a specific shift." action={<a href="/attendance" className="text-sm font-semibold text-forest hover:underline">Back to dashboard</a>} />
+    {error && <div className="mb-4"><Notice error>{error}</Notice></div>}{notice && <div className="mb-4"><Notice>{notice}</Notice></div>}
+    <div className="mb-5 inline-flex rounded-xl bg-neutral-100 p-1" role="tablist" aria-label="Manual attendance mode">
+      <button type="button" role="tab" aria-selected={tab === "roster"} onClick={() => { setTab("roster"); setError(""); }} className={`rounded-lg px-4 py-2.5 text-xs font-semibold ${tab === "roster" ? "bg-white text-black shadow-sm" : "text-neutral-500"}`}>Daily staff roster</button>
+      <button type="button" role="tab" aria-selected={tab === "leave"} onClick={() => { setTab("leave"); setError(""); }} className={`rounded-lg px-4 py-2.5 text-xs font-semibold ${tab === "leave" ? "bg-white text-black shadow-sm" : "text-neutral-500"}`}>Leave / sick</button>
     </div>
+
+    {tab === "roster" ? <Card className="p-0">
+      <div className="border-b border-neutral-100 p-4 sm:p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div><p className="text-[10px] font-semibold uppercase tracking-[.15em] text-neutral-400">Save selected staff</p><h2 className="mt-1 text-lg font-semibold">Daily attendance</h2><p className="mt-1 text-xs text-neutral-500">Mark the staff you want to record or correct. Unmarked staff are left unchanged.</p></div>
+          <Field label="Attendance date"><Input type="date" value={date} onChange={event => setDate(event.target.value)} /></Field>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <Field label="Record scope"><select value={scope} onChange={event => { setScope(event.target.value as typeof scope); setDraft({}); }} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm"><option value="all_shifts">Full day: all scheduled shifts</option><option value="specific_shift">Specific shift: team correction</option></select></Field>
+          {scope === "specific_shift" ? <Field label="Shift number"><select value={shiftNumber} onChange={event => { setShiftNumber(Number(event.target.value)); setDraft({}); }} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm">{Array.from({ length: maxShift }, (_, index) => <option key={index} value={index + 1}>Shift {index + 1}</option>)}</select></Field> : <div className="flex items-end"><p className="rounded-xl bg-emerald-50 px-3.5 py-3 text-xs leading-5 text-emerald-800">Full day applies Present or Absent to every scheduled shift. Present uses each shift's scheduled check-in and checkout times.</p></div>}
+        </div>
+        {scope === "specific_shift" && <div className="mt-3 grid gap-3 rounded-xl bg-neutral-50 p-3 sm:grid-cols-2 sm:p-4">
+          <Field label="Check-in time (optional)"><Input type="time" value={checkIn} onChange={event => setCheckIn(event.target.value)} /></Field>
+          <Field label="Check-out time (optional)"><Input type="time" value={checkOut} onChange={event => setCheckOut(event.target.value)} /></Field>
+          <p className="text-[11px] leading-5 text-neutral-500 sm:col-span-2">Selected times apply to this shift for everyone marked Present. Leave them blank to use each staff member's scheduled times. Overnight checkout is saved on the following date.</p>
+        </div>}
+        <div className="mt-4 grid grid-cols-3 gap-2 sm:max-w-lg">
+          <div className="rounded-xl bg-emerald-50 p-3"><p className="text-[10px] font-medium text-emerald-700">Present</p><p className="mt-1 text-xl font-semibold text-emerald-900">{markedPresent}</p></div>
+          <div className="rounded-xl bg-rose-50 p-3"><p className="text-[10px] font-medium text-rose-700">Absent</p><p className="mt-1 text-xl font-semibold text-rose-900">{markedAbsent}</p></div>
+          <div className="rounded-xl bg-neutral-100 p-3"><p className="text-[10px] font-medium text-neutral-500">Needs a mark</p><p className="mt-1 text-xl font-semibold text-neutral-800">{pendingCount}</p></div>
+        </div>
+      </div>
+
+      {staffLoading ? <div className="p-10 text-center text-sm text-neutral-500">Loading staff...</div> : roster.length === 0 ? <div className="p-10 text-center"><p className="text-sm font-semibold">No scheduled staff</p><p className="mt-1 text-xs text-neutral-500">No active staff have a shift for this day and scope.</p></div> : <div className="divide-y divide-neutral-100">
+        {roster.map(({ person, shifts }) => {
+          const current = statusFor(person, shifts);
+          const shiftLabel = scope === "all_shifts" ? shifts.map((shift, index) => `Shift ${index + 1}: ${shift.start}-${shift.end}`).join("; ") : `Shift ${shiftNumber}: ${shifts[shiftNumber - 1].start}-${shifts[shiftNumber - 1].end}`;
+          const special = current === "leave" || current === "sick" || current === "holiday";
+          return <div key={person.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+            <div className="min-w-0"><p className="truncate text-sm font-semibold">{person.full_name}</p><p className="mt-0.5 text-[11px] text-neutral-500">{person.staff_code} <span className="mx-1 text-neutral-300"> - </span> {shiftLabel}</p>{current === "mixed" && <p className="mt-1 text-[10px] font-medium text-amber-700">Mixed shift records  -  choose one status to correct this scope</p>}{special && <p className="mt-1 text-[10px] font-medium capitalize text-violet-700">Already recorded as {current}; resolve that entry before changing attendance</p>}</div>
+            <div className="grid grid-cols-2 gap-2 sm:w-56">
+              <button type="button" disabled={special} aria-pressed={current === "present"} onClick={() => setDraft(value => ({ ...value, [person.id]: "present" }))} className={`min-h-11 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${current === "present" ? "border-emerald-600 bg-emerald-600 text-white" : "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50"} disabled:cursor-not-allowed disabled:opacity-40`}>Present</button>
+              <button type="button" disabled={special} aria-pressed={current === "absent"} onClick={() => setDraft(value => ({ ...value, [person.id]: "absent" }))} className={`min-h-11 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${current === "absent" ? "border-rose-600 bg-rose-600 text-white" : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"} disabled:cursor-not-allowed disabled:opacity-40`}>Absent</button>
+            </div>
+          </div>;
+        })}
+      </div>}
+      <div className="sticky bottom-0 flex flex-col gap-3 border-t border-neutral-100 bg-white/95 p-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <p className="text-xs text-neutral-500">{weekDayName(dayNumber)} · {roster.length} scheduled staff · {markedPresent + markedAbsent} marked to save{excludedCount ? ` · ${excludedCount} excused` : ""}</p>
+        <Button type="button" onClick={() => void saveRoster()} disabled={busy || staffLoading || markedPresent + markedAbsent === 0}>{busy ? "Saving…" : `Save ${markedPresent + markedAbsent || "selected"} staff`}</Button>
+      </div>
+    </Card> : <Card className="max-w-xl">
+      <h2 className="text-lg font-semibold">Record leave or sick day</h2><p className="mb-5 mt-1 text-xs text-neutral-500">Apply an excused status to one staff member for the selected date.</p>
+      <form className="space-y-4" onSubmit={saveLeave}>
+        <Field label="Staff member"><select required value={leaveStaffId} onChange={event => setLeaveStaffId(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm"><option value="">Select staff member</option>{staff.map(person => <option key={person.id} value={person.id}>{person.full_name}  -  {person.staff_code}</option>)}</select></Field>
+        <Field label="Date"><Input type="date" required value={date} onChange={event => setDate(event.target.value)} /></Field>
+        <Field label="Record as"><select value={leaveKind} onChange={event => setLeaveKind(event.target.value as "leave" | "sick")} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm"><option value="leave">Leave</option><option value="sick">Sick</option></select></Field>
+        <Field label="Reason (required)"><textarea required minLength={1} maxLength={1000} rows={3} value={leaveReason} onChange={event => setLeaveReason(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm" placeholder="Add a short reason" /></Field>
+        <Button disabled={busy || !leaveStaffId}>{busy ? "Saving..." : "Save leave / sick day"}</Button>
+      </form>
+    </Card>}
   </>;
 }

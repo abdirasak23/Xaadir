@@ -6,7 +6,7 @@ const cors = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-admin-secret",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
-const issueSchema = z.object({ action: z.literal("issue-hr-code"), company_id: z.string().uuid() });
+const issueSchema = z.object({ action: z.literal("issue-hr-code"), company_id: z.string().uuid(), admin_id: z.string().uuid() });
 const issueStaffSchema = z.object({
   action: z.literal("issue-staff-code"),
   company_id: z.string().uuid(),
@@ -60,8 +60,8 @@ Deno.serve(async request => {
 
   if (parsed.data.action === "issue-hr-code") {
     const { data: membership, error } = await supabase.from("company_admins")
-      .select("auth_user_id,email,full_name,companies!inner(status)")
-      .eq("company_id", parsed.data.company_id).maybeSingle();
+      .select("id,auth_user_id,email,full_name,companies!inner(status)")
+      .eq("company_id", parsed.data.company_id).eq("id", parsed.data.admin_id).maybeSingle();
     if (error || !membership || !membership.auth_user_id) return response({ error: "Company HR account not found." }, 404);
     const company = Array.isArray(membership.companies) ? membership.companies[0] : membership.companies;
     if (!company || company.status !== "active") return response({ error: "Company is inactive." }, 400);

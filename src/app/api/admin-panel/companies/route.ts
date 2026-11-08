@@ -16,7 +16,7 @@ export async function GET() {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("companies")
-    .select("id,name,status,created_at,company_admins(full_name,email,phone)")
+    .select("id,name,status,created_at,company_admins(id,full_name,email,phone,created_at)")
     .order("created_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });

@@ -11,6 +11,7 @@ Deploy or update each standalone function from this directory (or paste its `ind
 
 ```powershell
 supabase functions deploy create-company
+supabase functions deploy create-company-hr
 supabase functions deploy create-staff
 supabase functions deploy invite-staff
 supabase functions deploy qr-token
@@ -39,3 +40,5 @@ The staff code is generated in the HR panel, expires after 30 minutes, and is si
 For dashboard-only deployment, create/update each function using the matching `supabase/functions/<name>/index.ts` file and configure the same project secrets above.
 
 `create-company` creates the company row and its confirmed Supabase Auth HR user. The initial password is `Xd` plus the phone number's last four digits; only Supabase Auth's password hash is persisted. The plaintext temporary password is returned once to the authenticated developer panel so it can be shared with the HR contact.
+
+`create-company-hr` allows a signed-in HR member to create another HR login for the same active company. It verifies the creating HR membership, creates a separate confirmed Supabase Auth account with a random temporary password, links it to the company, and marks it to require a password change at first sign-in. The temporary password is returned once to the server route and shown to the HR user for secure sharing.

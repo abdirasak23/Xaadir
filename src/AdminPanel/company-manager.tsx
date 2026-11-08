@@ -12,7 +12,7 @@ type Company = {
   name: string;
   status: string;
   created_at: string;
-  company_admins: { full_name: string; email: string; phone: string }[];
+  company_admins: { id: string; full_name: string; email: string; phone: string; created_at: string }[];
 };
 type Credentials = { company: string; fullName: string; email: string; phone: string; password: string };
 type RecoveryCode = { company: string; fullName: string; email: string; code: string; expiresAt: string };
@@ -95,7 +95,7 @@ export function CompanyManager() {
     if (!window.confirm(`Issue a one-time HR recovery code for ${admin.full_name}? It expires in 30 minutes.`)) return;
     setError(""); setRecoveryBusy(company.id); setRecoveryCode(null);
     try {
-      const response = await fetch(`/api/admin-panel/companies/${company.id}/recovery-code`, { method: "POST" });
+      const response = await fetch(`/api/admin-panel/companies/${company.id}/recovery-code`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ admin_id: admin.id }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "Could not issue recovery code.");
       setRecoveryCode({ company: company.name, fullName: result.full_name, email: result.email, code: result.code, expiresAt: result.expires_at });
@@ -142,7 +142,7 @@ export function CompanyManager() {
         </Card>
         <Card className="min-w-0 p-0"><div className="border-b border-slate-100 p-5"><h2 className="font-bold">Registered companies</h2><p className="mt-1 text-xs text-slate-500">Company workspace and assigned HR login.</p></div>
           {loading ? <Loading /> : companies.length === 0 ? <p className="p-8 text-center text-sm text-slate-400">No companies registered yet.</p> :
-            <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400"><tr><th className="px-4 py-3">Company</th><th className="px-4 py-3">HR contact</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Created</th><th className="px-4 py-3">Account</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map(company => { const admin = company.company_admins?.[0]; return <tr key={company.id}><td className="px-4 py-4 font-semibold">{company.name}</td><td className="px-4 py-4"><p>{admin?.full_name ?? "—"}</p><p className="text-xs text-slate-400">{admin?.email}</p></td><td className="px-4 py-4"><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-forest">{company.status}</span></td><td className="px-4 py-4 text-xs text-slate-500">{new Date(company.created_at).toLocaleDateString()}</td><td className="px-4 py-4"><button type="button" disabled={!admin || recoveryBusy === company.id} onClick={() => void issueRecoveryCode(company, admin)} className="whitespace-nowrap rounded-lg border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-800 hover:bg-neutral-50 disabled:opacity-50">{recoveryBusy === company.id ? "Issuing…" : "Issue reset code"}</button></td></tr>; })}</tbody></table></div>}
+            <div className="overflow-x-auto"><table className="w-full min-w-[860px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400"><tr><th className="px-4 py-3">Company</th><th className="px-4 py-3">HR accounts</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Created</th></tr></thead><tbody className="divide-y divide-slate-100">{companies.map(company => <tr key={company.id}><td className="px-4 py-4 font-semibold">{company.name}</td><td className="px-4 py-4"><div className="space-y-3">{company.company_admins?.map(admin => <div key={admin.id} className="flex items-center justify-between gap-3"><div><p className="font-medium">{admin.full_name}</p><p className="text-xs text-slate-400">{admin.email}</p></div><button type="button" disabled={recoveryBusy === company.id} onClick={() => void issueRecoveryCode(company, admin)} className="whitespace-nowrap rounded-lg border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-800 hover:bg-neutral-50 disabled:opacity-50">{recoveryBusy === company.id ? "Issuing…" : "Issue reset code"}</button></div>)}</div>{!company.company_admins?.length && <span className="text-xs text-neutral-400">No HR accounts</span>}</td><td className="px-4 py-4"><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-forest">{company.status}</span></td><td className="px-4 py-4 text-xs text-slate-500">{new Date(company.created_at).toLocaleDateString()}</td></tr>)}</tbody></table></div>}
         </Card>
       </div>
     </div> : <DeviceManager view={view} />}
