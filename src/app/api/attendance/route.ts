@@ -40,7 +40,15 @@ export async function POST(request: Request) {
     shift_number: z.number().int().min(1).max(8),
     check_in_at: timeSchema.or(z.literal("")),
     check_out_at: timeSchema.or(z.literal("")),
-    entries: z.array(z.object({ staff_id: uuidSchema, status: z.enum(["present", "absent"]) })).min(1).max(500),
+    entries: z.array(z.object({
+      staff_id: uuidSchema,
+      status: z.enum(["present", "absent"]),
+      times: z.array(z.object({
+        shift_number: z.number().int().min(1).max(8),
+        check_in_at: timeSchema.or(z.literal("")),
+        check_out_at: timeSchema.or(z.literal("")),
+      })).max(8).optional(),
+    })).min(1).max(500),
   });
   const roster = rosterSchema.safeParse(body);
   if (roster.success) {
@@ -86,8 +94,9 @@ export async function POST(request: Request) {
           let status = "absent";
           if (selected.status === "present") {
             const useCustom = input.scope === "specific_shift";
-            const inTime = useCustom && input.check_in_at ? input.check_in_at : shift.start;
-            const outTime = useCustom && input.check_out_at ? input.check_out_at : shift.end;
+            const individualTimes = selected.times?.find(value => value.shift_number === number);
+            const inTime = individualTimes?.check_in_at || (useCustom && input.check_in_at) || shift.start;
+            const outTime = individualTimes?.check_out_at || (useCustom && input.check_out_at) || shift.end;
             const checkIn = new Date(`${input.date}T${inTime}:00+03:00`);
             const overnight = outTime <= inTime;
             const outDate = overnight

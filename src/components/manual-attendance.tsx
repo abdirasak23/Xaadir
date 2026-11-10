@@ -16,6 +16,14 @@ const shiftsFor = (person: Staff, day: number): Shift[] => {
   return configured.length ? configured.map(({ start, end }) => ({ start: start.slice(0, 5), end: end.slice(0, 5) })) : [{ start: person.shift_start?.slice(0, 5) ?? "09:00", end: person.shift_end?.slice(0, 5) ?? "17:00" }];
 };
 const attendedStatuses = new Set(["present", "late", "manual"]);
+type ShiftTimes = { check_in_at: string; check_out_at: string };
+
+function timeInputValue(timestamp: string | null | undefined) {
+  if (!timestamp) return "";
+  const date = new Date(Date.parse(timestamp) + 180 * 60_000);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
+}
 
 export function ManualAttendance() {
   const [staff, setStaff] = useState<Staff[]>([]);
@@ -26,6 +34,7 @@ export function ManualAttendance() {
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
   const [draft, setDraft] = useState<Partial<Record<string, RosterStatus>>>({});
+  const [timeDraft, setTimeDraft] = useState<Record<string, Record<number, ShiftTimes>>>({});
   const [leaveStaffId, setLeaveStaffId] = useState("");
   const [leaveKind, setLeaveKind] = useState<"leave" | "sick">("leave");
   const [leaveReason, setLeaveReason] = useState("");
@@ -54,6 +63,7 @@ export function ManualAttendance() {
   }, []);
   useEffect(() => {
     setDraft({});
+    setTimeDraft({});
     void loadRecords().catch(reason => setError(reason instanceof Error ? reason.message : "Could not load attendance records."));
   }, [loadRecords]);
 
@@ -85,7 +95,10 @@ export function ManualAttendance() {
     try {
       const entries = roster.flatMap(({ person }) => {
         const status = draft[person.id];
-        return status ? [{ staff_id: person.id, status }] : [];
+        if (!status) return [];
+        const shifts = timeDraft[person.id];
+        const times = shifts ? Object.entries(shifts).map(([shift_number, value]) => ({ shift_number: Number(shift_number), ...value })) : undefined;
+        return [{ staff_id: person.id, status, ...(times?.length ? { times } : {}) }];
       });
       if (!entries.length) throw new Error("Mark at least one staff member Present or Absent before saving.");
       const response = await fetch("/api/attendance", {
@@ -96,6 +109,7 @@ export function ManualAttendance() {
       if (!response.ok) throw new Error(body.error ?? "Could not save the daily attendance roster.");
       setNotice(`Saved attendance for ${body.saved_staff_count} staff across ${body.saved_shift_count} shift records.`);
       setDraft({});
+      setTimeDraft({});
       await loadRecords();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save the daily attendance roster.");
@@ -139,8 +153,8 @@ export function ManualAttendance() {
           <Field label="Attendance date"><Input type="date" value={date} onChange={event => setDate(event.target.value)} /></Field>
         </div>
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          <Field label="Record scope"><select value={scope} onChange={event => { setScope(event.target.value as typeof scope); setDraft({}); }} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm"><option value="all_shifts">Full day: all scheduled shifts</option><option value="specific_shift">Specific shift: team correction</option></select></Field>
-          {scope === "specific_shift" ? <Field label="Shift number"><select value={shiftNumber} onChange={event => { setShiftNumber(Number(event.target.value)); setDraft({}); }} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm">{Array.from({ length: maxShift }, (_, index) => <option key={index} value={index + 1}>Shift {index + 1}</option>)}</select></Field> : <div className="flex items-end"><p className="rounded-xl bg-emerald-50 px-3.5 py-3 text-xs leading-5 text-emerald-800">Full day applies Present or Absent to every scheduled shift. Present uses each shift&apos;s scheduled check-in and checkout times.</p></div>}
+          <Field label="Record scope"><select value={scope} onChange={event => { setScope(event.target.value as typeof scope); setDraft({}); setTimeDraft({}); }} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm"><option value="all_shifts">Full day: all scheduled shifts</option><option value="specific_shift">Specific shift: team correction</option></select></Field>
+          {scope === "specific_shift" ? <Field label="Shift number"><select value={shiftNumber} onChange={event => { setShiftNumber(Number(event.target.value)); setDraft({}); setTimeDraft({}); }} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm">{Array.from({ length: maxShift }, (_, index) => <option key={index} value={index + 1}>Shift {index + 1}</option>)}</select></Field> : <div className="flex items-end"><p className="rounded-xl bg-emerald-50 px-3.5 py-3 text-xs leading-5 text-emerald-800">Full day applies Present or Absent to every scheduled shift. Present uses each shift&apos;s scheduled check-in and checkout times unless you set individual times below.</p></div>}
         </div>
         {scope === "specific_shift" && <div className="mt-3 grid gap-3 rounded-xl bg-neutral-50 p-3 sm:grid-cols-2 sm:p-4">
           <Field label="Check-in time (optional)"><Input type="time" value={checkIn} onChange={event => setCheckIn(event.target.value)} /></Field>
@@ -165,6 +179,28 @@ export function ManualAttendance() {
               <button type="button" disabled={special} aria-pressed={current === "present"} onClick={() => setDraft(value => ({ ...value, [person.id]: "present" }))} className={`min-h-11 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${current === "present" ? "border-emerald-600 bg-emerald-600 text-white" : "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50"} disabled:cursor-not-allowed disabled:opacity-40`}>Present</button>
               <button type="button" disabled={special} aria-pressed={current === "absent"} onClick={() => setDraft(value => ({ ...value, [person.id]: "absent" }))} className={`min-h-11 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${current === "absent" ? "border-rose-600 bg-rose-600 text-white" : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"} disabled:cursor-not-allowed disabled:opacity-40`}>Absent</button>
             </div>
+            {!special && <div className="sm:ml-auto sm:w-56">
+              <button type="button" onClick={() => {
+                if (timeDraft[person.id]) {
+                  setTimeDraft(value => { const next = { ...value }; delete next[person.id]; return next; });
+                  return;
+                }
+                const targets = scope === "all_shifts" ? shifts.map((shift, index) => ({ shift, number: index + 1 })) : [{ shift: shifts[shiftNumber - 1], number: shiftNumber }];
+                const individual = Object.fromEntries(targets.map(({ shift, number }) => {
+                  const record = records.find(item => item.staff_id === person.id && (item.shift_number ?? 1) === number);
+                  return [number, { check_in_at: timeInputValue(record?.check_in_at) || shift.start, check_out_at: timeInputValue(record?.check_out_at) || shift.end }];
+                }));
+                setDraft(value => ({ ...value, [person.id]: "present" }));
+                setTimeDraft(value => ({ ...value, [person.id]: individual }));
+              }} className="min-h-10 w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 hover:bg-neutral-50">{timeDraft[person.id] ? "Hide individual times" : "Edit this staff member's times"}</button>
+              {timeDraft[person.id] && <div className="mt-2 grid gap-2 rounded-xl bg-neutral-50 p-3">
+                {Object.entries(timeDraft[person.id]).map(([number, times]) => <div key={number} className="grid grid-cols-2 gap-2">
+                  <label className="text-[10px] font-medium text-neutral-500">Shift {number} check-in<input type="time" value={times.check_in_at} onChange={event => setTimeDraft(value => ({ ...value, [person.id]: { ...value[person.id], [number]: { ...times, check_in_at: event.target.value } } }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs text-neutral-900" /></label>
+                  <label className="text-[10px] font-medium text-neutral-500">Shift {number} check-out<input type="time" value={times.check_out_at} onChange={event => setTimeDraft(value => ({ ...value, [person.id]: { ...value[person.id], [number]: { ...times, check_out_at: event.target.value } } }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs text-neutral-900" /></label>
+                </div>)}
+                <p className="text-[10px] leading-4 text-neutral-500">These times apply only to this staff member. Overnight checkout is saved on the following date.</p>
+              </div>}
+            </div>}
           </div>;
         })}
       </div>}
