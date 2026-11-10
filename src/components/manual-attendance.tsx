@@ -25,7 +25,7 @@ export function ManualAttendance() {
   const [shiftNumber, setShiftNumber] = useState(1);
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
-  const [draft, setDraft] = useState<Record<string, RosterStatus>>({});
+  const [draft, setDraft] = useState<Partial<Record<string, RosterStatus>>>({});
   const [leaveStaffId, setLeaveStaffId] = useState("");
   const [leaveKind, setLeaveKind] = useState<"leave" | "sick">("leave");
   const [leaveReason, setLeaveReason] = useState("");
@@ -76,7 +76,7 @@ export function ManualAttendance() {
     return "";
   }
 
-  function statusFor(person: Staff, shifts: Shift[]) {
+  function statusFor(person: Staff, shifts: Shift[]): RosterStatus | "mixed" | "leave" | "sick" | "holiday" | "" {
     return draft[person.id] ?? savedStatus(person, shifts);
   }
 
