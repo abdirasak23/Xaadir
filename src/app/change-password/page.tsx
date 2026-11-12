@@ -4,6 +4,22 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Card, Field, Input, Notice } from "@/components/ui";
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 export default function ChangePasswordPage() {
   const router = useRouter();
   const [error, setError] = useState("");

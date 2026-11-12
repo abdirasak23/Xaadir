@@ -44,13 +44,16 @@ function formatTime(value: string | null) {
   return Number.isNaN(date.getTime()) ? value.slice(0, 5) : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 function attendanceStatusClass(status: string) {
-  if (status === "present" || status === "manual") return "bg-emerald-50 text-emerald-700";
-  if (status === "late") return "bg-amber-50 text-amber-700";
-  if (status === "absent") return "bg-rose-50 text-rose-700";
-  if (status === "leave") return "bg-violet-50 text-violet-700";
-  if (status === "sick") return "bg-teal-50 text-teal-700";
-  if (status === "holiday") return "bg-neutral-100 text-neutral-700";
+  if (["Present", "present", "manual", "late"].includes(status)) return "bg-emerald-50 text-emerald-700";
+  if (["Absent", "absent"].includes(status)) return "bg-rose-50 text-rose-700";
+  if (status === "Excused" || status === "leave" || status === "sick" || status === "holiday") return "bg-violet-50 text-violet-700";
   return "bg-neutral-100 text-neutral-600";
+}
+function attendanceState(status: string) {
+  if (["present", "late", "manual"].includes(status)) return "Present";
+  if (["leave", "sick", "holiday"].includes(status)) return "Excused";
+  if (status.toLowerCase() === "absent") return "Absent";
+  return status;
 }
 function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob), anchor = document.createElement("a");
@@ -59,12 +62,12 @@ function downloadBlob(blob: Blob, name: string) {
 function excelCell(value: unknown) { return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function downloadExcel(summaries: AttendanceSummary[], records: Attendance[], branches: Branch[], from: string, to: string) {
   const makeTable = (headings: unknown[], rows: unknown[][]) => [headings, ...rows].map((row, index) => `<tr>${row.map(value => `<${index ? "td" : "th"}>${excelCell(value)}</${index ? "td" : "th"}>`).join("")}</tr>`).join("");
-  const summaryHeadings = ["Staff name", "Staff code", "Branch", "Present days", "Late days", "Absent workdays", "Leave days", "Sick days", "Holiday days", "Late minutes", "Attendance rate"];
-  const summaryRows = summaries.map(summary => [summary.person.full_name, summary.person.staff_code, branches.find(item => item.id === summary.person.branch_id)?.name ?? "", summary.daysPresent, summary.daysLate, summary.daysAbsent, summary.daysLeave, summary.daysSick, summary.daysHoliday, summary.lateMinutes, `${summary.percentage}%`]);
+  const summaryHeadings = ["Staff name", "Staff code", "Branch", "Present days (includes late)", "Absent workdays", "Leave days", "Sick days", "Holiday days", "Late minutes", "Attendance rate"];
+  const summaryRows = summaries.map(summary => [summary.person.full_name, summary.person.staff_code, branches.find(item => item.id === summary.person.branch_id)?.name ?? "", summary.daysPresent, summary.daysAbsent, summary.daysLeave, summary.daysSick, summary.daysHoliday, summary.lateMinutes, `${summary.percentage}%`]);
   const detailsHeading = ["Date", "Staff name", "Staff code", "Branch", "Shift", "Check-in", "Check-out", "Status", "Late minutes", "Source", "Notes"];
   const detailRows = records.map(record => {
     const summary = summaries.find(item => item.person.id === record.staff_id);
-    return [record.date, summary?.person.full_name ?? record.staff_id, summary?.person.staff_code ?? "", branches.find(item => item.id === summary?.person.branch_id)?.name ?? record.staff?.branches?.name ?? "", record.shift_number ?? 1, formatTime(record.check_in_at), formatTime(record.check_out_at), record.status, record.late_minutes, record.source, record.note ?? ""];
+    return [record.date, summary?.person.full_name ?? record.staff_id, summary?.person.staff_code ?? "", branches.find(item => item.id === summary?.person.branch_id)?.name ?? record.staff?.branches?.name ?? "", record.shift_number ?? 1, formatTime(record.check_in_at), formatTime(record.check_out_at), attendanceState(record.status), record.late_minutes, record.source, record.note ?? ""];
   });
   const html = `<html><head><meta charset="utf-8"></head><body><h2>Attendance summary · ${excelCell(from)} to ${excelCell(to)}</h2><table>${makeTable(summaryHeadings, summaryRows)}</table><br><h2>Recorded check-in details</h2><table>${makeTable(detailsHeading, detailRows)}</table></body></html>`;
   downloadBlob(new Blob(["\ufeff", html], { type: "application/vnd.ms-excel;charset=utf-8" }), `xaadir-staff-attendance-${from}-to-${to}.xls`);
@@ -72,15 +75,15 @@ function downloadExcel(summaries: AttendanceSummary[], records: Attendance[], br
 function downloadPdf(summaries: AttendanceSummary[], records: Attendance[], branches: Branch[], from: string, to: string) {
   const clean = (value: unknown) => String(value ?? "").normalize("NFKD").replace(/[^\x20-\x7E]/g, "-").replace(/[\\()]/g, "\\$&");
   const pad = (value: unknown, size: number) => String(value ?? "").slice(0, size).padEnd(size, " ");
-  const lines = [`XAADIR - STAFF ATTENDANCE SUMMARY`, `Period: ${from} to ${to}`, `Staff listed: ${summaries.length} | Recorded check-in rows: ${records.length}`, "", "STAFF                 CODE       BRANCH           PRESENT LATE ABSENT LEAVE SICK HOLIDAY RATE", "-----------------------------------------------------------------------------------------------"];
+  const lines = [`XAADIR - STAFF ATTENDANCE SUMMARY`, `Period: ${from} to ${to}`, `Staff listed: ${summaries.length} | Recorded check-in rows: ${records.length}`, "", "STAFF                 CODE       BRANCH           PRESENT ABSENT LEAVE SICK HOLIDAY RATE", "-----------------------------------------------------------------------------------------------"];
   for (const summary of summaries) {
     const branchName = branches.find(item => item.id === summary.person.branch_id)?.name ?? "";
-    lines.push(`${pad(summary.person.full_name, 21)} ${pad(summary.person.staff_code, 10)} ${pad(branchName, 16)} ${String(summary.daysPresent).padStart(3)} ${String(summary.daysLate).padStart(4)} ${String(summary.daysAbsent).padStart(5)} ${String(summary.daysLeave).padStart(4)} ${String(summary.daysSick).padStart(3)} ${String(summary.daysHoliday).padStart(7)} ${String(summary.percentage).padStart(3)}%`);
+    lines.push(`${pad(summary.person.full_name, 21)} ${pad(summary.person.staff_code, 10)} ${pad(branchName, 16)} ${String(summary.daysPresent).padStart(7)} ${String(summary.daysAbsent).padStart(5)} ${String(summary.daysLeave).padStart(4)} ${String(summary.daysSick).padStart(3)} ${String(summary.daysHoliday).padStart(7)} ${String(summary.percentage).padStart(3)}%`);
   }
   lines.push("", "RECORDED CHECK-IN DETAILS", "DATE       STAFF                 CODE        SHIFT CHECK-IN  CHECK-OUT STATUS       LATE");
   for (const record of records) {
     const person = summaries.find(item => item.person.id === record.staff_id)?.person;
-    lines.push(`${record.date} ${pad(person?.full_name ?? "Unknown staff", 20)} ${pad(person?.staff_code ?? "", 10)} S${record.shift_number ?? 1}    ${pad(formatTime(record.check_in_at), 12)} ${pad(formatTime(record.check_out_at), 12)} ${pad(record.status, 11)} ${record.late_minutes ?? 0}m`);
+    lines.push(`${record.date} ${pad(person?.full_name ?? "Unknown staff", 20)} ${pad(person?.staff_code ?? "", 10)} S${record.shift_number ?? 1}    ${pad(formatTime(record.check_in_at), 12)} ${pad(formatTime(record.check_out_at), 12)} ${pad(attendanceState(record.status), 11)} ${record.late_minutes ?? 0}m`);
   }
   const pages: string[][] = [];
   for (let i = 0; i < lines.length; i += 42) pages.push(lines.slice(i, i + 42));
@@ -107,6 +110,7 @@ export function AttendanceDashboard() {
   const [staff, setStaff] = useState<Staff[]>([]);
   const [records, setRecords] = useState<Attendance[]>([]);
   const [todayRecords, setTodayRecords] = useState<Attendance[]>([]);
+  const [weeklyRecords, setWeeklyRecords] = useState<Attendance[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [from, setFrom] = useState(today), [to, setTo] = useState(today), [branch, setBranch] = useState("");
   const [recordSearch, setRecordSearch] = useState("");
@@ -131,14 +135,17 @@ export function AttendanceDashboard() {
       try {
         const params = new URLSearchParams({ from, to });
         const todayParams = new URLSearchParams({ from: today, to: today });
-        if (branch) { params.set("branch", branch); todayParams.set("branch", branch); }
-        const [attendanceResponse, todayResponse, staffResponse, leaveResponse] = await Promise.all([
-          fetch(`/api/attendance?${params}`), fetch(`/api/attendance?${todayParams}`), fetch(`/api/staff${branch ? `?branch=${branch}` : ""}`), fetch("/api/leave"),
+        const weekStart = new Date(`${today}T00:00:00Z`);
+        weekStart.setUTCDate(weekStart.getUTCDate() - 6);
+        const weekParams = new URLSearchParams({ from: weekStart.toISOString().slice(0, 10), to: today });
+        if (branch) { params.set("branch", branch); todayParams.set("branch", branch); weekParams.set("branch", branch); }
+        const [attendanceResponse, todayResponse, weekResponse, staffResponse, leaveResponse] = await Promise.all([
+          fetch(`/api/attendance?${params}`), fetch(`/api/attendance?${todayParams}`), fetch(`/api/attendance?${weekParams}`), fetch(`/api/staff${branch ? `?branch=${branch}` : ""}`), fetch("/api/leave"),
         ]);
-        const attendanceData = await attendanceResponse.json(), todayData = await todayResponse.json(), staffData = await staffResponse.json(), leaveData = await leaveResponse.json();
+        const attendanceData = await attendanceResponse.json(), todayData = await todayResponse.json(), weekData = await weekResponse.json(), staffData = await staffResponse.json(), leaveData = await leaveResponse.json();
         if (!active) return;
-        if (!attendanceResponse.ok || !todayResponse.ok || !staffResponse.ok || !leaveResponse.ok) setError(attendanceData.error ?? todayData.error ?? staffData.error ?? leaveData.error ?? "Could not load attendance.");
-        else { setRecords(attendanceData); setTodayRecords(todayData); setStaff(staffData.filter((person: Staff) => person.status === "active")); setHolidays(leaveData.holidays ?? []); setError(""); }
+        if (!attendanceResponse.ok || !todayResponse.ok || !weekResponse.ok || !staffResponse.ok || !leaveResponse.ok) setError(attendanceData.error ?? todayData.error ?? weekData.error ?? staffData.error ?? leaveData.error ?? "Could not load attendance.");
+        else { setRecords(attendanceData); setTodayRecords(todayData); setWeeklyRecords(weekData); setStaff(staffData.filter((person: Staff) => person.status === "active")); setHolidays(leaveData.holidays ?? []); setError(""); }
       } catch (reason) {
         if (active) setError(reason instanceof Error ? reason.message : "Could not load attendance.");
       } finally {
@@ -156,9 +163,8 @@ export function AttendanceDashboard() {
   const metrics = useMemo(() => {
     const activeStaff = new Set(staff.map(person => person.id));
     const daily = todayRecords.filter(record => activeStaff.has(record.staff_id));
-    const presentToday = new Set(daily.filter(record => record.status === "present" || record.status === "manual").map(record => record.staff_id)).size;
-    const lateToday = new Set(daily.filter(record => record.status === "late").map(record => record.staff_id)).size;
-    const onLeaveToday = new Set(daily.filter(record => record.status === "leave" || record.status === "sick").map(record => record.staff_id)).size;
+    const presentToday = new Set(daily.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.staff_id)).size;
+    const onLeaveToday = new Set(daily.filter(record => ["leave", "sick", "holiday"].includes(record.status)).map(record => record.staff_id)).size;
     const presentIds = new Set(daily.filter(record => ["present", "late", "manual", "leave", "sick", "holiday"].includes(record.status)).map(record => record.staff_id));
     const absentToday = staff.filter(person => workDates(today, today, person).length > 0 && !presentIds.has(person.id)).length;
     const end = to > today ? today : to;
@@ -169,11 +175,26 @@ export function AttendanceDashboard() {
       denominator += Math.max(0, days.length - [...excused].filter(date => days.includes(date)).length);
     }
     const attended = new Set(records.filter(record => activeStaff.has(record.staff_id) && ["present", "late", "manual"].includes(record.status)).map(record => `${record.staff_id}:${record.date}`)).size;
-    return { presentToday, lateToday, absentToday, onLeaveToday, percentage: denominator ? Math.round(attended / denominator * 100) : null };
+    return { presentToday, absentToday, onLeaveToday, percentage: denominator ? Math.round(attended / denominator * 100) : null };
   }, [records, todayRecords, staff, from, to, workDates]);
+  const todayRoster = useMemo(() => staff.map(person => {
+    const entries = todayRecords.filter(record => record.staff_id === person.id);
+    const attended = entries.some(record => ["present", "late", "manual"].includes(record.status));
+    const excused = entries.some(record => ["leave", "sick", "holiday"].includes(record.status));
+    const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
+    const configured = person.scheduled_shifts ?? [];
+    const shifts = configured.some(shift => shift.day !== undefined)
+      ? configured.filter(shift => shift.day === weekday)
+      : configured.length ? configured : person.shift_start && person.shift_end ? [{ start: person.shift_start, end: person.shift_end }] : [];
+    const sessions = shifts.map((shift, index) => {
+      const record = entries.find(item => (item.shift_number ?? 1) === index + 1);
+      return { number: index + 1, schedule: `${shift.start.slice(0, 5)}-${shift.end.slice(0, 5)}`, checkIn: record?.check_in_at ?? null, checkOut: record?.check_out_at ?? null, lateMinutes: record?.status === "late" ? record.late_minutes ?? 0 : 0 };
+    });
+    return { person, entries, sessions, attended, excused, status: attended ? "Present" : excused ? "Excused" : shifts.length ? "Absent" : "No shift today", lateMinutes: sessions.reduce((sum, session) => sum + session.lateMinutes, 0) };
+  }).sort((a, b) => Number(b.attended) - Number(a.attended) || a.person.full_name.localeCompare(b.person.full_name)), [staff, todayRecords]);
   const summaries = useMemo(() => staff.map(person => {
     const entries = records.filter(record => record.staff_id === person.id);
-    const daysPresent = new Set(entries.filter(record => ["present", "manual"].includes(record.status)).map(record => record.date)).size;
+    const daysPresent = new Set(entries.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.date)).size;
     const daysLate = new Set(entries.filter(record => record.status === "late").map(record => record.date)).size;
     const lateMinutes = entries.reduce((sum, record) => sum + (record.late_minutes ?? 0), 0);
     const daysLeave = new Set(entries.filter(record => record.status === "leave").map(record => record.date)).size, daysSick = new Set(entries.filter(record => record.status === "sick").map(record => record.date)).size, daysHoliday = new Set(entries.filter(record => record.status === "holiday").map(record => record.date)).size;
@@ -226,7 +247,12 @@ export function AttendanceDashboard() {
   const filteredAttendanceRows = useMemo(() => attendanceRows.filter(row => {
     const query = recordSearch.trim().toLowerCase();
     const matchesSearch = !query || row.person.full_name.toLowerCase().includes(query) || row.person.staff_code.toLowerCase().includes(query);
-    return matchesSearch && (recordStatus === "all" || row.status === recordStatus);
+    const matchesStatus = recordStatus === "all"
+      || (recordStatus === "present" && ["present", "late", "manual"].includes(row.status))
+      || (recordStatus === "absent" && ["absent", "Absent"].includes(row.status))
+      || (recordStatus === "excused" && ["leave", "sick", "holiday"].includes(row.status))
+      || (recordStatus === "not-recorded" && ["No entry", "Not checked in"].includes(row.status));
+    return matchesSearch && matchesStatus;
   }), [attendanceRows, recordSearch, recordStatus]);
   const recordsPerPage = 20;
   const recordPageCount = Math.max(1, Math.ceil(filteredAttendanceRows.length / recordsPerPage));
@@ -272,18 +298,73 @@ export function AttendanceDashboard() {
   const isPresetActive = (preset: "today" | "yesterday" | "week" | "month") => {
     const range = presetRange(preset); return from === range.from && to === range.to;
   };
-  const weekBars = Array.from({length:7}, (_, index) => { const d = new Date(`${today}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - (6-index)); const date = d.toISOString().slice(0,10); return { date, label:d.toLocaleDateString(undefined,{weekday:"short",timeZone:"UTC"}), count:new Set(records.filter(record=>record.date===date && ["present","late","manual"].includes(record.status)).map(record=>record.staff_id)).size }; });
+  const weekBars = Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(`${today}T12:00:00Z`);
+    day.setUTCDate(day.getUTCDate() - (6 - index));
+    const date = day.toISOString().slice(0, 10);
+    const dayRecords = weeklyRecords.filter(record => record.date === date);
+    const presentIds = new Set(dayRecords.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.staff_id));
+    const excusedIds = new Set(dayRecords.filter(record => ["leave", "sick", "holiday"].includes(record.status)).map(record => record.staff_id));
+    const scheduled = staff.filter(person => workDates(date, date, person).length > 0);
+    const absent = date <= today ? scheduled.filter(person => !presentIds.has(person.id) && !excusedIds.has(person.id)).length : 0;
+    return { date, label: day.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" }), present: presentIds.size, absent };
+  });
+  const chartMax = Math.max(1, ...weekBars.map(day => Math.max(day.present, day.absent)));
 
   return <><PageHeading eyebrow="Workforce insights" title="Attendance" description="Daily visibility into check-ins, punctuality and attendance patterns." action={<a href="/attendance/manual" className="inline-flex items-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800"><HugeiconsIcon icon={Add01Icon} size={17} strokeWidth={2} />Manual entry</a>} />
     {error && <div className="mb-4"><Notice error>{error}</Notice></div>}
-    <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-4 py-3 text-[10px] text-neutral-600 shadow-sm">Status legend: {[['Present','bg-emerald-100 text-emerald-700'],['Late','bg-amber-100 text-amber-700'],['Absent','bg-rose-100 text-rose-700'],['Manual','bg-blue-100 text-blue-700'],['Leave','bg-violet-100 text-violet-700'],['Sick','bg-teal-100 text-teal-700'],['Holiday','bg-neutral-100 text-neutral-700']].map(([label,style])=><span key={label} className={`rounded-full px-2.5 py-1 font-medium ${style}`}>{label}</span>)}</div>
+    <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-4 py-3 text-[10px] text-neutral-600 shadow-sm"><span className="mr-1 font-medium">Attendance status</span>{[['Present · includes late','bg-emerald-100 text-emerald-700'],['Absent','bg-rose-100 text-rose-700'],['Excused','bg-violet-100 text-violet-700'],['No record yet','bg-neutral-100 text-neutral-700']].map(([label,style])=><span key={label} className={`rounded-full px-2.5 py-1 font-medium ${style}`}>{label}</span>)}</div>
     <Card className="mb-6"><div className="flex flex-col gap-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Attendance overview</h2><p className="mt-1 text-xs text-slate-500">Choose a quick range or customize dates.</p></div><div className="flex flex-wrap rounded-xl bg-neutral-100 p-1">{[["Today","today"],["Yesterday","yesterday"],["This week","week"],["This month","month"]].map(([label,value])=><button key={value} onClick={()=>setPreset(value as "today"|"yesterday"|"week"|"month")} className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${isPresetActive(value as "today"|"yesterday"|"week"|"month")?"bg-white text-black shadow-sm":"text-neutral-500 hover:text-black"}`}>{label}</button>)}</div></div><div className="grid grid-cols-2 gap-3 md:flex md:items-end"><label className="space-y-1 text-[11px] font-medium text-slate-500">From<Input type="date" value={from} max={to} onChange={event => setFrom(event.target.value)} /></label><label className="space-y-1 text-[11px] font-medium text-slate-500">To<Input type="date" value={to} min={from} onChange={event => setTo(event.target.value)} /></label><label className="space-y-1 text-[11px] font-medium text-slate-500 md:min-w-44">Branch<select className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm" value={branch} onChange={event => setBranch(event.target.value)}><option value="">All branches</option>{branches.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></div></Card>
-    <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-      {[[ "Present today", metrics.presentToday, "Checked in on time", "bg-emerald-50", "bg-emerald-500"], ["Late today", metrics.lateToday, "Arrived after shift start", "bg-amber-50", "bg-amber-500"], ["Absent today", metrics.absentToday, "No attendance recorded", "bg-neutral-100", "bg-neutral-500"], ["On leave today", metrics.onLeaveToday, "Leave and sick", "bg-violet-50", "bg-violet-500"], ["Attendance rate", metrics.percentage === null ? "N/A" : `${metrics.percentage}%`, "Eligible working days", "bg-teal-50", "bg-teal-500"]].map(([label, value, hint, badge, dot]) => <Card key={String(label)} className="relative overflow-hidden p-5 transition hover:-translate-y-0.5 hover:shadow-card"><div className="flex items-start justify-between"><p className="text-xs font-medium text-neutral-500">{label}</p><span className={`grid h-9 w-9 place-items-center rounded-xl ${badge}`}><span className={`h-2.5 w-2.5 rounded-full ${dot}`} /></span></div><p className="mt-4 text-[34px] font-semibold leading-none tracking-tight text-black">{value}</p><p className="mt-2 text-[11px] text-neutral-400">{hint}</p></Card>)}
+    <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {[{ label: "Present today", value: metrics.presentToday, hint: "Includes on-time and late arrivals", badge: "bg-emerald-50", dot: "bg-emerald-500" }, { label: "Absent today", value: metrics.absentToday, hint: "Scheduled staff without attendance", badge: "bg-rose-50", dot: "bg-rose-500" }, { label: "Excused today", value: metrics.onLeaveToday, hint: "Leave, sick, or holiday", badge: "bg-violet-50", dot: "bg-violet-500" }, { label: "Attendance rate", value: metrics.percentage === null ? "N/A" : `${metrics.percentage}%`, hint: "Selected date range", badge: "bg-teal-50", dot: "bg-teal-500" }].map(({ label, value, hint, badge, dot }) => <Card key={label} className="relative overflow-hidden p-5"><div className="flex items-start justify-between"><p className="text-xs font-medium text-neutral-500">{label}</p><span className={`grid h-9 w-9 place-items-center rounded-xl ${badge}`}><span className={`h-2.5 w-2.5 rounded-full ${dot}`} /></span></div><p className="mt-4 text-[34px] font-semibold leading-none tracking-tight text-black">{value}</p><p className="mt-2 text-[11px] text-neutral-400">{hint}</p></Card>)}
     </div>
-    <div className="mb-6 grid gap-4 lg:grid-cols-[1.25fr_.75fr]"><Card><div className="flex items-start justify-between"><div><h2 className="font-semibold">Weekly activity</h2><p className="mt-1 text-xs text-neutral-500">Recorded attendance by day</p></div><span className="rounded-lg bg-neutral-100 px-2.5 py-1.5 text-[10px] text-neutral-500">Last 7 days</span></div><div className="mt-6 flex h-36 items-end justify-between gap-3">{weekBars.map(bar=><div key={bar.date} className="flex h-full flex-1 flex-col items-center justify-end gap-2"><span className="text-[10px] tabular-nums text-neutral-500">{bar.count}</span><div className="w-full max-w-8 rounded-t-lg bg-neutral-100" style={{height:`${Math.max(8,Math.round(bar.count/Math.max(1,...weekBars.map(b=>b.count))*90))}%`}}><div className="h-full w-full rounded-t-lg bg-black" /></div><span className="text-[10px] text-neutral-400">{bar.label}</span></div>)}</div></Card><Card><h2 className="font-semibold">Today at a glance</h2><p className="mt-1 text-xs text-neutral-500">Attendance status across your active team</p><div className="mt-5 space-y-4">{[["Present",metrics.presentToday,"bg-black"],["Late",metrics.lateToday,"bg-amber-400"],["Absent",metrics.absentToday,"bg-neutral-300"],["On leave / sick",metrics.onLeaveToday,"bg-violet-500"]].map(([label,value,color])=><div key={String(label)}><div className="mb-1.5 flex justify-between text-xs"><span className="text-neutral-600">{label}</span><span className="font-medium">{value}</span></div><div className="h-1.5 overflow-hidden rounded-full bg-neutral-100"><div className={`h-full rounded-full ${color}`} style={{width:`${staff.length?Math.min(100,Number(value)/staff.length*100):0}%`}} /></div></div>)}</div></Card></div>
-    <Card className="min-w-0 p-0"><div className="flex flex-col gap-4 border-b border-neutral-100 p-5 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-semibold">Team attendance</h2><p className="mt-1 text-xs text-neutral-500">All active staff are included, with status totals and recorded shift details for this period.</p></div><div className="flex gap-2"><button onClick={()=>downloadExcel(summaries,records,branches,from,to)} disabled={loading||staff.length===0} className="rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 text-xs font-medium hover:bg-neutral-50 disabled:opacity-40">Export Excel</button><button onClick={()=>downloadPdf(summaries,records,branches,from,to)} disabled={loading||staff.length===0} className="rounded-xl bg-black px-3.5 py-2.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-40">Download PDF</button></div></div>
-      {loading ? <Loading /> : summaries.length===0 ? <div className="p-10 text-center text-sm text-neutral-400">No active staff found.</div> : <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">{summaries.map(summary=>{const latest=summary.entries[0];const chip=latest?.status==="late"?"bg-amber-50 text-amber-700":latest?.status==="leave"?"bg-violet-50 text-violet-700":latest?.status==="sick"?"bg-teal-50 text-teal-700":latest?.status==="holiday"?"bg-neutral-100 text-neutral-700":latest?.status==="absent"?"bg-rose-50 text-rose-700":latest?.status==="manual"?"bg-blue-50 text-blue-700":latest?"bg-emerald-50 text-emerald-700":"bg-neutral-100 text-neutral-500";return <button key={summary.person.id} type="button" onClick={()=>setSelected(summary.person)} className="rounded-2xl border border-neutral-100 p-4 text-left transition hover:-translate-y-0.5 hover:border-neutral-200 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/20"><div className="flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-neutral-100 text-xs font-semibold">{summary.person.full_name.split(/\s+/).slice(0,2).map(word=>word[0]).join("").toUpperCase()}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{summary.person.full_name}</p><p className="mt-0.5 text-[11px] text-neutral-500">{summary.person.staff_code}</p></div><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${chip}`}>{latest?.status??"No record"}</span></div><div className="mt-4 grid grid-cols-2 gap-2"><div className="rounded-xl bg-neutral-50 p-3"><p className="text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-in</p><p className="mt-1 text-sm font-semibold tabular-nums">{formatTime(latest?.check_in_at??null)}</p></div><div className="rounded-xl bg-neutral-50 p-3"><p className="text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-out</p><p className="mt-1 text-sm font-semibold tabular-nums">{formatTime(latest?.check_out_at??null)}</p></div></div><div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-neutral-50 p-3 text-center"><div><p className="text-[9px] uppercase text-neutral-400">Present</p><p className="mt-1 text-xs font-semibold">{summary.daysPresent}</p></div><div><p className="text-[9px] uppercase text-neutral-400">Late</p><p className="mt-1 text-xs font-semibold">{summary.daysLate}</p></div><div><p className="text-[9px] uppercase text-neutral-400">Absent</p><p className="mt-1 text-xs font-semibold">{summary.daysAbsent}</p></div><div><p className="text-[9px] uppercase text-neutral-400">Leave</p><p className="mt-1 text-xs font-semibold">{summary.daysLeave}</p></div><div><p className="text-[9px] uppercase text-neutral-400">Sick</p><p className="mt-1 text-xs font-semibold">{summary.daysSick}</p></div><div><p className="text-[9px] uppercase text-neutral-400">Holiday</p><p className="mt-1 text-xs font-semibold">{summary.daysHoliday}</p></div></div><div className="mt-3 flex justify-between text-[11px] text-neutral-500"><span>{summary.lateMinutes} late minutes</span><span className="font-semibold text-black">{summary.percentage === null ? "-" : `${summary.percentage}%`}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-100"><div className="h-full rounded-full bg-black" style={{width:`${summary.percentage === null ? 0 : Math.min(100,summary.percentage)}%`}} /></div><p className="mt-3 text-[10px] text-neutral-400">{latest?.date??"No attendance yet"}  -  select for details</p></button>;})}</div>}
+    <div className="mb-6">
+      <Card>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div><h2 className="font-semibold">Attendance trend</h2><p className="mt-1 text-xs text-neutral-500">Present includes staff who arrived late.</p></div>
+          <div className="flex flex-wrap gap-4 text-[11px] text-neutral-600"><span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />Present</span><span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-rose-400" />Absent</span></div>
+        </div>
+        <div className="mt-6 flex h-44 items-end gap-2 sm:gap-4">
+          {weekBars.map(day => <div key={day.date} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-2">
+            <div className="flex h-36 w-full items-end justify-center gap-1">
+              <div title={"Present: " + day.present} className="w-3 rounded-t-md bg-emerald-500 transition-all sm:w-5" style={{ height: Math.max(day.present ? 5 : 1, day.present / chartMax * 100) + "%" }} />
+              <div title={"Absent: " + day.absent} className="w-3 rounded-t-md bg-rose-400 transition-all sm:w-5" style={{ height: Math.max(day.absent ? 5 : 1, day.absent / chartMax * 100) + "%" }} />
+            </div>
+            <span className="text-[10px] text-neutral-400">{day.label}</span>
+          </div>)}
+        </div>
+      </Card>
+    </div>
+
+    <Card className="min-w-0 p-0">
+      <div className="flex flex-col gap-4 border-b border-neutral-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+        <div><h2 className="font-semibold">Today's attendance roster</h2><p className="mt-1 text-xs text-neutral-500">One row per staff member. Late arrivals are included in Present and marked beside their check-in.</p><p className="mt-2 text-[11px] text-neutral-400">Present {metrics.presentToday} | Absent {metrics.absentToday} | Excused {metrics.onLeaveToday}</p></div>
+        <div className="flex gap-2">
+          <button onClick={() => downloadExcel(summaries, records, branches, from, to)} disabled={loading || staff.length === 0} className="rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 text-xs font-medium hover:bg-neutral-50 disabled:opacity-40">Export Excel</button>
+          <button onClick={() => downloadPdf(summaries, records, branches, from, to)} disabled={loading || staff.length === 0} className="rounded-xl bg-black px-3.5 py-2.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-40">Download PDF</button>
+        </div>
+      </div>
+      {loading ? <Loading /> : todayRoster.length === 0 ? <div className="p-10 text-center text-sm text-neutral-500">No active staff found.</div> : <>
+        <div className="divide-y divide-neutral-100 md:hidden">
+          {todayRoster.map(row => <div key={row.person.id} className="px-4 py-3.5">
+            <div className="flex items-start justify-between gap-3"><button type="button" onClick={() => setSelected(row.person)} className="min-w-0 text-left"><span className="block truncate text-sm font-semibold">{row.person.full_name}</span><span className="mt-0.5 block text-[10px] text-neutral-400">{row.person.staff_code}{branches.find(item => item.id === row.person.branch_id) ? " | " + branches.find(item => item.id === row.person.branch_id)?.name : ""}</span></button><span className={"shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium " + attendanceStatusClass(row.status === "Present" ? "present" : row.status === "Absent" ? "absent" : row.status === "Excused" ? "leave" : "other")}>{row.status}</span></div>
+            {row.sessions.length > 0 ? <div className="mt-3 grid grid-cols-2 gap-3">
+              <div><p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-in</p>{row.sessions.map(session => <p key={session.number} className="py-0.5 text-xs tabular-nums">S{session.number} {formatTime(session.checkIn)}{session.lateMinutes > 0 ? <span className="ml-1 text-[10px] font-medium text-amber-700">Late {session.lateMinutes}m</span> : null}</p>)}</div>
+              <div><p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-out</p>{row.sessions.map(session => <p key={session.number} className="py-0.5 text-xs tabular-nums">S{session.number} {formatTime(session.checkOut)}</p>)}</div>
+            </div> : <p className="mt-2 text-xs text-neutral-400">No shift scheduled today</p>}
+          </div>)}
+        </div>
+        <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[900px] text-left text-xs">
+          <thead className="bg-neutral-50 text-[10px] uppercase tracking-wide text-neutral-400"><tr>{["Staff member", "Scheduled shifts", "Check-in", "Check-out", "Attendance"].map(label => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead>
+          <tbody className="divide-y divide-neutral-100">{todayRoster.map(row => <tr key={row.person.id} className="hover:bg-neutral-50">
+            <td className="px-4 py-3.5"><button type="button" onClick={() => setSelected(row.person)} className="text-left"><span className="block font-medium text-neutral-900">{row.person.full_name}</span><span className="mt-0.5 block text-[10px] text-neutral-400">{row.person.staff_code}</span></button></td>
+            <td className="px-4 py-3.5">{row.sessions.length ? row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">S{session.number} {session.schedule}</p>) : <span className="text-neutral-400">No shift</span>}</td>
+            <td className="px-4 py-3.5">{row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">{formatTime(session.checkIn)}{session.lateMinutes > 0 ? <span className="ml-1 text-[10px] font-medium text-amber-700">Late {session.lateMinutes}m</span> : null}</p>)}</td>
+            <td className="px-4 py-3.5">{row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">{formatTime(session.checkOut)}</p>)}</td>
+            <td className="px-4 py-3.5"><span className={"rounded-full px-2.5 py-1 text-[10px] font-medium " + attendanceStatusClass(row.status === "Present" ? "present" : row.status === "Absent" ? "absent" : row.status === "Excused" ? "leave" : "other")}>{row.status}</span></td>
+          </tr>)}</tbody>
+        </table></div>
+      </>}
     </Card>
     <Card className="mt-6 min-w-0 p-0">
       <div className="border-b border-neutral-100 p-4 sm:p-5">
@@ -292,22 +373,21 @@ export function AttendanceDashboard() {
           <div className="grid gap-2 sm:grid-cols-2 lg:w-[min(100%,520px)]">
             <Input aria-label="Search staff attendance" placeholder="Search staff name or code" value={recordSearch} onChange={event => { setRecordSearch(event.target.value); setRecordPage(1); }} />
             <select aria-label="Filter attendance status" value={recordStatus} onChange={event => { setRecordStatus(event.target.value); setRecordPage(1); }} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm">
-              <option value="all">All statuses</option><option value="present">Present</option><option value="late">Late</option><option value="absent">Absent</option><option value="manual">Manual</option><option value="leave">Leave</option><option value="sick">Sick</option><option value="holiday">Holiday</option><option value="No entry">No entry</option><option value="Not checked in">Not checked in</option>
+              <option value="all">All attendance</option><option value="present">Present (includes late)</option><option value="absent">Absent</option><option value="excused">Excused</option><option value="not-recorded">No record yet</option>
             </select>
           </div>
         </div>
         <p className="mt-3 text-[11px] text-neutral-400">{filteredAttendanceRows.length} shift records</p>
       </div>
       {loading ? <Loading /> : pagedAttendanceRows.length === 0 ? <div className="p-10 text-center text-sm text-neutral-500">No attendance records match these filters.</div> : <>
-        <div className="space-y-3 p-3 md:hidden">
-          {pagedAttendanceRows.map(row => <button key={row.key} type="button" onClick={() => setSelected(row.person)} className="w-full rounded-2xl border border-neutral-100 bg-white p-4 text-left transition hover:border-neutral-200 hover:bg-neutral-50">
-            <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold">{row.person.full_name}</p><p className="mt-0.5 text-[11px] text-neutral-500">{row.person.staff_code} | Shift {row.shiftNumber}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium capitalize ${attendanceStatusClass(row.status)}`}>{row.status}</span></div>
-            <p className="mt-3 text-[11px] text-neutral-500">{new Date(`${row.date}T00:00:00Z`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}{branches.find(item => item.id === row.person.branch_id)?.name ? ` | ${branches.find(item => item.id === row.person.branch_id)?.name}` : ""}</p>
-            <div className="mt-3 grid grid-cols-2 gap-2"><div className="rounded-xl bg-neutral-50 p-3"><p className="text-[10px] font-medium uppercase text-neutral-400">Check-in</p><p className="mt-1 text-sm font-semibold tabular-nums">{formatTime(row.checkIn)}</p></div><div className="rounded-xl bg-neutral-50 p-3"><p className="text-[10px] font-medium uppercase text-neutral-400">Check-out</p><p className="mt-1 text-sm font-semibold tabular-nums">{formatTime(row.checkOut)}</p></div></div>
-            {row.lateMinutes > 0 && <p className="mt-2 text-[11px] font-medium text-amber-700">{row.lateMinutes} minutes late</p>}
+        <div className="divide-y divide-neutral-100 md:hidden">
+          {pagedAttendanceRows.map(row => <button key={row.key} type="button" onClick={() => setSelected(row.person)} className="w-full px-4 py-3.5 text-left transition hover:bg-neutral-50">
+            <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold">{row.person.full_name}</p><p className="mt-0.5 truncate text-[11px] text-neutral-500">{row.person.staff_code} · Shift {row.shiftNumber} · {new Date(`${row.date}T00:00:00Z`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(attendanceState(row.status))}`}>{attendanceState(row.status)}</span></div>
+            <div className="mt-2 grid grid-cols-2 gap-3 text-xs"><p><span className="text-[10px] uppercase tracking-wide text-neutral-400">In </span><span className="font-medium tabular-nums">{formatTime(row.checkIn)}</span></p><p><span className="text-[10px] uppercase tracking-wide text-neutral-400">Out </span><span className="font-medium tabular-nums">{formatTime(row.checkOut)}</span></p></div>
+            {row.lateMinutes > 0 && <p className="mt-1 text-[10px] font-medium text-amber-700">{row.lateMinutes} minutes late</p>}
           </button>)}
         </div>
-        <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[980px] text-left text-xs"><thead className="bg-neutral-50 text-[10px] uppercase tracking-wide text-neutral-400"><tr>{["Date", "Staff", "Branch", "Shift", "Check-in", "Check-out", "Status", "Late", "Source"].map(label => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead><tbody className="divide-y divide-neutral-100">{pagedAttendanceRows.map(row => <tr key={row.key} tabIndex={0} role="button" onClick={() => setSelected(row.person)} onKeyDown={event => { if (event.key === "Enter") setSelected(row.person); }} className="cursor-pointer transition hover:bg-neutral-50"><td className="whitespace-nowrap px-4 py-3.5 tabular-nums">{row.date}</td><td className="px-4 py-3.5"><p className="font-medium text-neutral-900">{row.person.full_name}</p><p className="mt-0.5 text-[10px] text-neutral-400">{row.person.staff_code}</p></td><td className="max-w-40 truncate px-4 py-3.5">{branches.find(item => item.id === row.person.branch_id)?.name ?? "-"}</td><td className="px-4 py-3.5">Shift {row.shiftNumber}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkIn)}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkOut)}</td><td className="px-4 py-3.5"><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium capitalize ${attendanceStatusClass(row.status)}`}>{row.status}</span></td><td className="px-4 py-3.5">{row.lateMinutes ? `${row.lateMinutes} min` : "-"}</td><td className="px-4 py-3.5 capitalize">{row.source}</td></tr>)}</tbody></table></div>
+        <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[980px] text-left text-xs"><thead className="bg-neutral-50 text-[10px] uppercase tracking-wide text-neutral-400"><tr>{["Date", "Staff", "Branch", "Shift", "Check-in", "Check-out", "Status", "Late", "Source"].map(label => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead><tbody className="divide-y divide-neutral-100">{pagedAttendanceRows.map(row => <tr key={row.key} tabIndex={0} role="button" onClick={() => setSelected(row.person)} onKeyDown={event => { if (event.key === "Enter") setSelected(row.person); }} className="cursor-pointer transition hover:bg-neutral-50"><td className="whitespace-nowrap px-4 py-3.5 tabular-nums">{row.date}</td><td className="px-4 py-3.5"><p className="font-medium text-neutral-900">{row.person.full_name}</p><p className="mt-0.5 text-[10px] text-neutral-400">{row.person.staff_code}</p></td><td className="max-w-40 truncate px-4 py-3.5">{branches.find(item => item.id === row.person.branch_id)?.name ?? "-"}</td><td className="px-4 py-3.5">Shift {row.shiftNumber}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkIn)}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkOut)}</td><td className="px-4 py-3.5"><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(attendanceState(row.status))}`}>{attendanceState(row.status)}</span></td><td className="px-4 py-3.5">{row.lateMinutes ? `${row.lateMinutes} min` : "-"}</td><td className="px-4 py-3.5 capitalize">{row.source}</td></tr>)}</tbody></table></div>
         <div className="flex flex-col gap-2 border-t border-neutral-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-[11px] text-neutral-500">Showing {Math.min(filteredAttendanceRows.length, (recordPage - 1) * recordsPerPage + 1)}-{Math.min(filteredAttendanceRows.length, recordPage * recordsPerPage)} of {filteredAttendanceRows.length}</p><div className="flex gap-2"><button type="button" onClick={() => setRecordPage(page => Math.max(1, page - 1))} disabled={recordPage <= 1} className="rounded-lg border border-neutral-200 px-3 py-2 text-xs font-medium disabled:opacity-40">Previous</button><span className="self-center px-2 text-xs text-neutral-500">Page {recordPage} of {recordPageCount}</span><button type="button" onClick={() => setRecordPage(page => Math.min(recordPageCount, page + 1))} disabled={recordPage >= recordPageCount} className="rounded-lg border border-neutral-200 px-3 py-2 text-xs font-medium disabled:opacity-40">Next</button></div></div>
       </>}
     </Card>
@@ -317,7 +397,7 @@ export function AttendanceDashboard() {
     </Card></div>
     {selectedSummary && <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-5" onClick={event=>{if(event.target===event.currentTarget)setSelected(null);}}><section role="dialog" aria-modal="true" aria-label={`${selected?.full_name} attendance details`} className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl">
       <div className="flex items-start justify-between border-b border-slate-100 p-5"><div><p className="text-xs font-bold uppercase tracking-wider text-forest">Daily records</p><h2 className="mt-1 text-xl font-bold">{selected?.full_name}</h2><p className="text-xs text-slate-500">{selected?.staff_code}  -  Complete attendance history</p></div><button onClick={() => setSelected(null)} className="rounded-lg px-3 py-2 text-slate-500 hover:bg-slate-100" aria-label="Close">Close</button></div>
-      <div className="max-h-[calc(90vh-90px)] overflow-auto p-5">{selfiesLoading ? <div className="py-10"><Loading /></div> : selectedHistory.length===0 ? <p className="rounded-2xl bg-neutral-50 p-8 text-center text-sm text-neutral-500">No attendance history is available for this staff member.</p> : <div className="space-y-3">{selectedHistory.map(record=><article key={record.id} className="rounded-2xl border border-neutral-100 bg-white p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-semibold">{new Date(`${record.date}T00:00:00`).toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric",year:"numeric"})}</p><p className="mt-1 text-[11px] text-neutral-500">{record.staff?.branches?.name??"Branch not listed"}  -  {record.source==="manual"?"Added manually":"QR check-in"}</p></div><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${record.status==="late"?"bg-amber-50 text-amber-700":record.status==="absent"?"bg-neutral-100 text-neutral-600":"bg-emerald-50 text-emerald-700"}`}>{record.status}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><div className="rounded-xl bg-neutral-50 p-3"><p className="text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-in time</p><p className="mt-1 text-lg font-semibold tabular-nums">{formatTime(record.check_in_at)}</p></div><div className="rounded-xl bg-neutral-50 p-3"><p className="text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-out time</p><p className="mt-1 text-lg font-semibold tabular-nums">{formatTime(record.check_out_at)}</p></div></div><SelfieEvidence attendanceId={record.id} selfies={record.selfies ?? []} method={record.staff?.check_in_method} loading={selfiesLoading} error={selfiesError} /><div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-neutral-500"><span>Late by <b className="font-medium text-neutral-800">{record.late_minutes??0} min</b></span>{record.distance_m!==null&&<span>Distance <b className="font-medium text-neutral-800">{record.distance_m} m</b></span>}{record.note&&<span className="basis-full pt-1">Note: {record.note}</span>}</div></article>)}</div>}</div>
+      <div className="max-h-[calc(90vh-90px)] overflow-auto p-5">{selfiesLoading ? <div className="py-10"><Loading /></div> : selectedHistory.length===0 ? <p className="rounded-2xl bg-neutral-50 p-8 text-center text-sm text-neutral-500">No attendance history is available for this staff member.</p> : <div className="space-y-3">{selectedHistory.map(record=><article key={record.id} className="rounded-2xl border border-neutral-100 bg-white p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-semibold">{new Date(`${record.date}T00:00:00`).toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric",year:"numeric"})}</p><p className="mt-1 text-[11px] text-neutral-500">{record.staff?.branches?.name??"Branch not listed"}  -  {record.source==="manual"?"Added manually":"QR check-in"}</p></div><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(attendanceState(record.status))}`}>{attendanceState(record.status)}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><div className="rounded-xl bg-neutral-50 p-3"><p className="text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-in time</p><p className="mt-1 text-lg font-semibold tabular-nums">{formatTime(record.check_in_at)}</p></div><div className="rounded-xl bg-neutral-50 p-3"><p className="text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-out time</p><p className="mt-1 text-lg font-semibold tabular-nums">{formatTime(record.check_out_at)}</p></div></div><SelfieEvidence attendanceId={record.id} selfies={record.selfies ?? []} method={record.staff?.check_in_method} loading={selfiesLoading} error={selfiesError} /><div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-neutral-500"><span>Late by <b className="font-medium text-neutral-800">{record.late_minutes??0} min</b></span>{record.distance_m!==null&&<span>Distance <b className="font-medium text-neutral-800">{record.distance_m} m</b></span>}{record.note&&<span className="basis-full pt-1">Note: {record.note}</span>}</div></article>)}</div>}</div>
       {selectedSummary.missingDates.length > 0 && <section className="border-t border-rose-100 bg-rose-50/60 p-5"><h3 className="text-sm font-semibold text-rose-900">Missing past workdays</h3><p className="mt-1 text-xs text-rose-700">Convert an absent day to leave or sick time. A reason is required.</p><div className="mt-3 space-y-2">{selectedSummary.missingDates.map(date=><div key={date} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white px-3 py-2"><span className="text-xs font-medium">{date}</span><div className="flex gap-2"><button onClick={() => void convertAbsent(selectedSummary.person, date, "leave")} className="rounded-lg bg-violet-50 px-2.5 py-1.5 text-[11px] font-semibold text-violet-700">Convert to leave</button><button onClick={() => void convertAbsent(selectedSummary.person, date, "sick")} className="rounded-lg bg-teal-50 px-2.5 py-1.5 text-[11px] font-semibold text-teal-700">Convert to sick</button></div></div>)}</div></section>}
     </section></div>}
   </>;
