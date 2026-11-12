@@ -338,7 +338,7 @@ export function AttendanceDashboard() {
 
     <Card className="min-w-0 p-0">
       <div className="flex flex-col gap-4 border-b border-neutral-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-        <div><h2 className="font-semibold">Today's attendance roster</h2><p className="mt-1 text-xs text-neutral-500">One row per staff member. Late arrivals are included in Present and marked beside their check-in.</p><p className="mt-2 text-[11px] text-neutral-400">Present {metrics.presentToday} | Absent {metrics.absentToday} | Excused {metrics.onLeaveToday}</p></div>
+        <div><h2 className="font-semibold">Today&apos;s attendance roster</h2><p className="mt-1 text-xs text-neutral-500">One row per staff member. Late arrivals are included in Present and marked beside their check-in.</p><p className="mt-2 text-[11px] text-neutral-400">Present {metrics.presentToday} | Absent {metrics.absentToday} | Excused {metrics.onLeaveToday}</p></div>
         <div className="flex gap-2">
           <button onClick={() => downloadExcel(summaries, records, branches, from, to)} disabled={loading || staff.length === 0} className="rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 text-xs font-medium hover:bg-neutral-50 disabled:opacity-40">Export Excel</button>
           <button onClick={() => downloadPdf(summaries, records, branches, from, to)} disabled={loading || staff.length === 0} className="rounded-xl bg-black px-3.5 py-2.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-40">Download PDF</button>
