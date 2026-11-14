@@ -7,8 +7,9 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon } from "@hugeicons/core-free-icons";
 import { localDateInTimezone, WEEKEND_DAYS } from "../../shared/attendance-rules";
 
-type Staff = { id: string; full_name: string; staff_code: string; status: string; branch_id: string; annual_leave_days?: number; scheduled_shifts?: { start: string; end: string; day?: number }[]; shift_start?: string; shift_end?: string };
+type Staff = { id: string; full_name: string; staff_code: string; status: string; branch_id: string; annual_leave_days?: number; grace_minutes?: number; scheduled_shifts?: { start: string; end: string; day?: number }[]; shift_start?: string; shift_end?: string };
 type Holiday = { id: string; date: string; name: string; branch_id: string | null };
+type LeaveRequest = { staff_id: string; start_date: string; end_date: string; status: string };
 type Attendance = {
   id: string; staff_id: string; branch_id: string; date: string; shift_number?: number; check_in_at: string | null; check_out_at: string | null;
   status: string; late_minutes: number; source: string; lat: number | null; lng: number | null; distance_m: number | null;
@@ -21,6 +22,67 @@ type Branch = { id: string; name: string };
 type AttendanceTableRow = { key: string; person: Staff; date: string; shiftNumber: number; checkIn: string | null; checkOut: string | null; status: string; lateMinutes: number; source: string; note: string | null };
 type AttendanceSummary = { person: Staff; entries: Attendance[]; daysPresent: number; daysLate: number; daysLeave: number; daysSick: number; daysHoliday: number; daysAbsent: number; lateMinutes: number; percentage: number; expectedDays: number };
 const today = localDateInTimezone();
+const MINUTE_MS = 60_000;
+const CHECKIN_BEFORE_MIN = 20;
+const CHECKIN_AFTER_MIN = 60;
+const CHECKOUT_BEFORE_MIN = 30;
+const CHECKOUT_AFTER_MIN = 120;
+type ShiftWindow = { startMs: number; endMs: number; checkinOpensAt: number; checkinClosesAt: number; checkoutOpensAt: number; checkoutClosesAt: number };
+function shiftsForDate(person: Staff, date: string) {
+  const configured = person.scheduled_shifts ?? [];
+  if (configured.some(shift => shift.day !== undefined)) {
+    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+    return configured.filter(shift => shift.day === weekday);
+  }
+  return configured.length ? configured : person.shift_start && person.shift_end ? [{ start: person.shift_start, end: person.shift_end }] : [];
+}
+function shiftWindow(date: string, shift: { start: string; end: string }): ShiftWindow {
+  const startMs = Date.parse(`${date}T${shift.start.slice(0, 5)}:00+03:00`);
+  let endMs = Date.parse(`${date}T${shift.end.slice(0, 5)}:00+03:00`);
+  if (endMs <= startMs) endMs += 86_400_000;
+  return {
+    startMs,
+    endMs,
+    checkinOpensAt: startMs - CHECKIN_BEFORE_MIN * MINUTE_MS,
+    checkinClosesAt: startMs + CHECKIN_AFTER_MIN * MINUTE_MS,
+    checkoutOpensAt: endMs - CHECKOUT_BEFORE_MIN * MINUTE_MS,
+    checkoutClosesAt: endMs + CHECKOUT_AFTER_MIN * MINUTE_MS,
+  };
+}
+function noScanShiftState(date: string, shift: { start: string; end: string }, nowMs: number) {
+  if (date < today) return "Absent";
+  const window = shiftWindow(date, shift);
+  if (nowMs < window.checkinOpensAt) return "Upcoming";
+  if (nowMs <= window.checkinClosesAt) return "Check-in open";
+  return "Absent";
+}
+function noScanDayState(date: string, shifts: { start: string; end: string }[], nowMs: number) {
+  if (!shifts.length) return "No shift today";
+  const states = shifts.map(shift => noScanShiftState(date, shift, nowMs));
+  if (states.every(state => state === "Absent")) return "Absent";
+  if (states.includes("Check-in open")) return "Check-in open";
+  return "Upcoming";
+}
+function recordTiming(row: Pick<AttendanceTableRow, "person" | "date" | "shiftNumber" | "checkIn" | "checkOut" | "lateMinutes">) {
+  const shifts = shiftsForDate(row.person, row.date);
+  const shift = shifts[row.shiftNumber - 1];
+  if (!shift) return { earlyCheckIn: 0, earlyCheckOut: 0 };
+  const window = shiftWindow(row.date, shift);
+  const checkInMs = row.checkIn ? Date.parse(row.checkIn) : NaN;
+  const checkOutMs = row.checkOut ? Date.parse(row.checkOut) : NaN;
+  const earlyCheckIn = Number.isFinite(checkInMs) && checkInMs < window.startMs ? Math.floor((window.startMs - checkInMs) / MINUTE_MS) : 0;
+  const earlyCheckOutMinutes = Number.isFinite(checkOutMs) && checkOutMs < window.endMs ? Math.floor((window.endMs - checkOutMs) / MINUTE_MS) : 0;
+  const earlyCheckOut = earlyCheckOutMinutes > (row.person.grace_minutes ?? 5) ? earlyCheckOutMinutes : 0;
+  return { earlyCheckIn, earlyCheckOut };
+}
+function rowAttendanceState(row: AttendanceTableRow, nowMs: number) {
+  const normalized = attendanceState(row.status);
+  if (["Present", "Excused"].includes(normalized)) return normalized;
+  const synthetic = row.key.startsWith("missing:");
+  if (normalized === "Absent" && !synthetic) return "Absent";
+  const shift = shiftsForDate(row.person, row.date)[row.shiftNumber - 1];
+  return shift ? noScanShiftState(row.date, shift, nowMs) : normalized;
+}
 function SelfieEvidence({ attendanceId, selfies, method, loading, error }: { attendanceId: string; selfies: AttendanceSelfie[]; method?: "biometric" | "selfie"; loading: boolean; error: string }) {
   const photos = selfies.filter(item => item.attendance_id === attendanceId);
   const entries = [["Check-in selfie", photos.find(item => item.kind === "check_in")], ["Check-out selfie", photos.find(item => item.kind === "check_out")]] as const;
@@ -47,6 +109,9 @@ function attendanceStatusClass(status: string) {
   if (["Present", "present", "manual", "late"].includes(status)) return "bg-emerald-50 text-emerald-700";
   if (["Absent", "absent"].includes(status)) return "bg-rose-50 text-rose-700";
   if (status === "Excused" || status === "leave" || status === "sick" || status === "holiday") return "bg-violet-50 text-violet-700";
+  if (status === "Check-in open" || status === "Checkout window open") return "bg-amber-50 text-amber-800";
+  if (status === "Upcoming" || status === "On shift") return "bg-sky-50 text-sky-700";
+  if (status === "No check-out") return "bg-orange-50 text-orange-800";
   return "bg-neutral-100 text-neutral-600";
 }
 function attendanceState(status: string) {
@@ -112,7 +177,9 @@ export function AttendanceDashboard() {
   const [todayRecords, setTodayRecords] = useState<Attendance[]>([]);
   const [weeklyRecords, setWeeklyRecords] = useState<Attendance[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [from, setFrom] = useState(today), [to, setTo] = useState(today), [branch, setBranch] = useState("");
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [recordSearch, setRecordSearch] = useState("");
   const [recordStatus, setRecordStatus] = useState("all");
   const [recordPage, setRecordPage] = useState(1);
@@ -121,6 +188,10 @@ export function AttendanceDashboard() {
   const [selectedHistory, setSelectedHistory] = useState<Attendance[]>([]);
   const [selfiesLoading, setSelfiesLoading] = useState(false);
   const [selfiesError, setSelfiesError] = useState("");
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => {
     void fetch("/api/branches").then(async response => {
       const data = await response.json();
@@ -145,7 +216,7 @@ export function AttendanceDashboard() {
         const attendanceData = await attendanceResponse.json(), todayData = await todayResponse.json(), weekData = await weekResponse.json(), staffData = await staffResponse.json(), leaveData = await leaveResponse.json();
         if (!active) return;
         if (!attendanceResponse.ok || !todayResponse.ok || !weekResponse.ok || !staffResponse.ok || !leaveResponse.ok) setError(attendanceData.error ?? todayData.error ?? weekData.error ?? staffData.error ?? leaveData.error ?? "Could not load attendance.");
-        else { setRecords(attendanceData); setTodayRecords(todayData); setWeeklyRecords(weekData); setStaff(staffData.filter((person: Staff) => person.status === "active")); setHolidays(leaveData.holidays ?? []); setError(""); }
+        else { setRecords(attendanceData); setTodayRecords(todayData); setWeeklyRecords(weekData); setStaff(staffData.filter((person: Staff) => person.status === "active")); setHolidays(leaveData.holidays ?? []); setLeaveRequests(leaveData.leaves ?? []); setError(""); }
       } catch (reason) {
         if (active) setError(reason instanceof Error ? reason.message : "Could not load attendance.");
       } finally {
@@ -161,37 +232,65 @@ export function AttendanceDashboard() {
     return dates;
   }, [holidays]);
   const metrics = useMemo(() => {
-    const activeStaff = new Set(staff.map(person => person.id));
-    const daily = todayRecords.filter(record => activeStaff.has(record.staff_id));
-    const presentToday = new Set(daily.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.staff_id)).size;
-    const onLeaveToday = new Set(daily.filter(record => ["leave", "sick", "holiday"].includes(record.status)).map(record => record.staff_id)).size;
-    const presentIds = new Set(daily.filter(record => ["present", "late", "manual", "leave", "sick", "holiday"].includes(record.status)).map(record => record.staff_id));
-    const absentToday = staff.filter(person => workDates(today, today, person).length > 0 && !presentIds.has(person.id)).length;
     const end = to > today ? today : to;
-    let denominator = 0;
+    const rangeRecords = records.filter(record => record.date >= from && record.date <= end);
+    const recordedPresent = new Set(rangeRecords.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => `${record.staff_id}:${record.date}`));
+    const recordedExcused = new Set(rangeRecords.filter(record => ["leave", "sick", "holiday"].includes(record.status)).map(record => `${record.staff_id}:${record.date}`));
+    const scheduledKeys = new Set<string>();
+    const expectedKeys = new Set<string>();
     for (const person of staff) {
-      const days = workDates(from, end, person);
-      const excused = new Set(records.filter(record => record.staff_id === person.id && ["leave", "sick", "holiday"].includes(record.status)).map(record => record.date));
-      denominator += Math.max(0, days.length - [...excused].filter(date => days.includes(date)).length);
+      for (const date of workDates(from, end, person)) {
+        const key = `${person.id}:${date}`;
+        scheduledKeys.add(key);
+        const shifts = shiftsForDate(person, date);
+        const dayEntries = rangeRecords.filter(record => record.staff_id === person.id && record.date === date);
+        const allShiftsExplicitlyAbsent = shifts.length > 0 && shifts.every((_, index) => dayEntries.some(record => (record.shift_number ?? 1) === index + 1 && record.status === "absent"));
+        if (date < today || allShiftsExplicitlyAbsent || noScanDayState(date, shifts, nowMs) === "Absent") expectedKeys.add(key);
+      }
     }
-    const attended = new Set(records.filter(record => activeStaff.has(record.staff_id) && ["present", "late", "manual"].includes(record.status)).map(record => `${record.staff_id}:${record.date}`)).size;
-    return { presentToday, absentToday, onLeaveToday, percentage: denominator ? Math.round(attended / denominator * 100) : null };
-  }, [records, todayRecords, staff, from, to, workDates]);
+    // Count actual attendance even when the staff schedule is missing, the shift is
+    // an exception, or the company records work on its configured weekend day.
+    const activeStaffIds = new Set(staff.map(person => person.id));
+    const presentKeys = new Set([...recordedPresent].filter(key => activeStaffIds.has(key.slice(0, key.indexOf(":")))));
+    const excusedKeys = new Set([...scheduledKeys].filter(key => {
+      if (presentKeys.has(key)) return false;
+      if (recordedExcused.has(key)) return true;
+      const [staffId, date] = key.split(":");
+      return leaveRequests.some(leave => leave.staff_id === staffId && leave.status === "approved" && leave.start_date <= date && leave.end_date >= date);
+    }));
+    let denominator = 0;
+    let absentDays = 0;
+    const denominatorKeys = new Set([...expectedKeys, ...presentKeys]);
+    for (const key of denominatorKeys) {
+      if (!excusedKeys.has(key)) denominator += 1;
+    }
+    for (const key of expectedKeys) {
+      if (!presentKeys.has(key) && !excusedKeys.has(key)) absentDays += 1;
+    }
+    return { presentDays: presentKeys.size, absentDays, excusedDays: excusedKeys.size, percentage: denominator ? Math.round(presentKeys.size / denominator * 100) : null };
+  }, [records, staff, leaveRequests, from, to, nowMs, workDates]);
   const todayRoster = useMemo(() => staff.map(person => {
     const entries = todayRecords.filter(record => record.staff_id === person.id);
     const attended = entries.some(record => ["present", "late", "manual"].includes(record.status));
     const excused = entries.some(record => ["leave", "sick", "holiday"].includes(record.status));
-    const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
-    const configured = person.scheduled_shifts ?? [];
-    const shifts = configured.some(shift => shift.day !== undefined)
-      ? configured.filter(shift => shift.day === weekday)
-      : configured.length ? configured : person.shift_start && person.shift_end ? [{ start: person.shift_start, end: person.shift_end }] : [];
+    const shifts = shiftsForDate(person, today);
     const sessions = shifts.map((shift, index) => {
       const record = entries.find(item => (item.shift_number ?? 1) === index + 1);
-      return { number: index + 1, schedule: `${shift.start.slice(0, 5)}-${shift.end.slice(0, 5)}`, checkIn: record?.check_in_at ?? null, checkOut: record?.check_out_at ?? null, lateMinutes: record?.status === "late" ? record.late_minutes ?? 0 : 0 };
+      const window = shiftWindow(today, shift);
+      const nextShift = shifts[index + 1];
+      const checkoutClose = nextShift ? Math.min(window.checkoutClosesAt, shiftWindow(today, nextShift).checkinOpensAt) : window.checkoutClosesAt;
+      const checkoutState = record?.check_in_at
+        ? record.check_out_at ? "Checked out" : nowMs < window.checkoutOpensAt ? "On shift" : nowMs <= checkoutClose ? "Checkout window open" : "No check-out"
+        : null;
+      const scanState = record?.check_in_at ? "Present" : record?.status === "absent" ? "Absent" : noScanShiftState(today, shift, nowMs);
+      const rowLike = { person, date: today, shiftNumber: index + 1, checkIn: record?.check_in_at ?? null, checkOut: record?.check_out_at ?? null, lateMinutes: record?.late_minutes ?? 0 };
+      const timing = record?.check_in_at ? recordTiming(rowLike) : { earlyCheckIn: 0, earlyCheckOut: 0 };
+      return { number: index + 1, schedule: `${shift.start.slice(0, 5)}-${shift.end.slice(0, 5)}`, checkIn: record?.check_in_at ?? null, checkOut: record?.check_out_at ?? null, lateMinutes: record?.late_minutes ?? 0, scanState, checkoutState, ...timing };
     });
-    return { person, entries, sessions, attended, excused, status: attended ? "Present" : excused ? "Excused" : shifts.length ? "Absent" : "No shift today", lateMinutes: sessions.reduce((sum, session) => sum + session.lateMinutes, 0) };
-  }).sort((a, b) => Number(b.attended) - Number(a.attended) || a.person.full_name.localeCompare(b.person.full_name)), [staff, todayRecords]);
+    const allShiftsExplicitlyAbsent = shifts.length > 0 && sessions.every(session => session.scanState === "Absent");
+    const status = attended ? "Present" : excused ? "Excused" : allShiftsExplicitlyAbsent ? "Absent" : noScanDayState(today, shifts, nowMs);
+    return { person, entries, sessions, attended, excused, status, lateMinutes: sessions.reduce((sum, session) => sum + session.lateMinutes, 0) };
+  }).sort((a, b) => Number(b.attended) - Number(a.attended) || a.person.full_name.localeCompare(b.person.full_name)), [staff, todayRecords, nowMs]);
   const summaries = useMemo(() => staff.map(person => {
     const entries = records.filter(record => record.staff_id === person.id);
     const daysPresent = new Set(entries.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.date)).size;
@@ -217,11 +316,7 @@ export function AttendanceDashboard() {
       for (const person of staff) {
         const dates = workDates(from, end, person);
         for (const date of dates) {
-          const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
-          const configured = person.scheduled_shifts ?? [];
-          const shifts = configured.some(shift => shift.day !== undefined)
-            ? configured.filter(shift => shift.day === weekday)
-            : configured.length ? configured : person.shift_start && person.shift_end ? [{ start: person.shift_start, end: person.shift_end }] : [];
+          const shifts = shiftsForDate(person, date);
           const dayRows = records.filter(record => record.staff_id === person.id && record.date === date);
           for (const [index] of shifts.entries()) {
             const shiftNumber = index + 1;
@@ -233,7 +328,7 @@ export function AttendanceDashboard() {
               shiftNumber,
               checkIn: null,
               checkOut: null,
-              status: dayRows.length ? "No entry" : date === today ? "Not checked in" : "Absent",
+              status: date === today ? "Not checked in" : "Absent",
               lateMinutes: 0,
               source: "-",
               note: null,
@@ -247,13 +342,14 @@ export function AttendanceDashboard() {
   const filteredAttendanceRows = useMemo(() => attendanceRows.filter(row => {
     const query = recordSearch.trim().toLowerCase();
     const matchesSearch = !query || row.person.full_name.toLowerCase().includes(query) || row.person.staff_code.toLowerCase().includes(query);
+    const state = rowAttendanceState(row, nowMs);
     const matchesStatus = recordStatus === "all"
-      || (recordStatus === "present" && ["present", "late", "manual"].includes(row.status))
-      || (recordStatus === "absent" && ["absent", "Absent"].includes(row.status))
-      || (recordStatus === "excused" && ["leave", "sick", "holiday"].includes(row.status))
-      || (recordStatus === "not-recorded" && ["No entry", "Not checked in"].includes(row.status));
+      || (recordStatus === "present" && state === "Present")
+      || (recordStatus === "absent" && state === "Absent")
+      || (recordStatus === "excused" && state === "Excused")
+      || (recordStatus === "not-recorded" && ["Upcoming", "Check-in open"].includes(state));
     return matchesSearch && matchesStatus;
-  }), [attendanceRows, recordSearch, recordStatus]);
+  }), [attendanceRows, recordSearch, recordStatus, nowMs]);
   const recordsPerPage = 20;
   const recordPageCount = Math.max(1, Math.ceil(filteredAttendanceRows.length / recordsPerPage));
   const pagedAttendanceRows = filteredAttendanceRows.slice((recordPage - 1) * recordsPerPage, recordPage * recordsPerPage);
@@ -306,7 +402,11 @@ export function AttendanceDashboard() {
     const presentIds = new Set(dayRecords.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.staff_id));
     const excusedIds = new Set(dayRecords.filter(record => ["leave", "sick", "holiday"].includes(record.status)).map(record => record.staff_id));
     const scheduled = staff.filter(person => workDates(date, date, person).length > 0);
-    const absent = date <= today ? scheduled.filter(person => !presentIds.has(person.id) && !excusedIds.has(person.id)).length : 0;
+    const absent = date < today
+      ? scheduled.filter(person => !presentIds.has(person.id) && !excusedIds.has(person.id)).length
+      : date === today
+        ? scheduled.filter(person => !presentIds.has(person.id) && !excusedIds.has(person.id) && noScanDayState(date, shiftsForDate(person, date), nowMs) === "Absent").length
+        : 0;
     return { date, label: day.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" }), present: presentIds.size, absent };
   });
   const chartMax = Math.max(1, ...weekBars.map(day => Math.max(day.present, day.absent)));
@@ -316,7 +416,7 @@ export function AttendanceDashboard() {
     <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-4 py-3 text-[10px] text-neutral-600 shadow-sm"><span className="mr-1 font-medium">Attendance status</span>{[['Present · includes late','bg-emerald-100 text-emerald-700'],['Absent','bg-rose-100 text-rose-700'],['Excused','bg-violet-100 text-violet-700'],['No record yet','bg-neutral-100 text-neutral-700']].map(([label,style])=><span key={label} className={`rounded-full px-2.5 py-1 font-medium ${style}`}>{label}</span>)}</div>
     <Card className="mb-6"><div className="flex flex-col gap-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Attendance overview</h2><p className="mt-1 text-xs text-slate-500">Choose a quick range or customize dates.</p></div><div className="flex flex-wrap rounded-xl bg-neutral-100 p-1">{[["Today","today"],["Yesterday","yesterday"],["This week","week"],["This month","month"]].map(([label,value])=><button key={value} onClick={()=>setPreset(value as "today"|"yesterday"|"week"|"month")} className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${isPresetActive(value as "today"|"yesterday"|"week"|"month")?"bg-white text-black shadow-sm":"text-neutral-500 hover:text-black"}`}>{label}</button>)}</div></div><div className="grid grid-cols-2 gap-3 md:flex md:items-end"><label className="space-y-1 text-[11px] font-medium text-slate-500">From<Input type="date" value={from} max={to} onChange={event => setFrom(event.target.value)} /></label><label className="space-y-1 text-[11px] font-medium text-slate-500">To<Input type="date" value={to} min={from} onChange={event => setTo(event.target.value)} /></label><label className="space-y-1 text-[11px] font-medium text-slate-500 md:min-w-44">Branch<select className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm" value={branch} onChange={event => setBranch(event.target.value)}><option value="">All branches</option>{branches.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></div></Card>
     <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      {[{ label: "Present today", value: metrics.presentToday, hint: "Includes on-time and late arrivals", badge: "bg-emerald-50", dot: "bg-emerald-500" }, { label: "Absent today", value: metrics.absentToday, hint: "Scheduled staff without attendance", badge: "bg-rose-50", dot: "bg-rose-500" }, { label: "Excused today", value: metrics.onLeaveToday, hint: "Leave, sick, or holiday", badge: "bg-violet-50", dot: "bg-violet-500" }, { label: "Attendance rate", value: metrics.percentage === null ? "N/A" : `${metrics.percentage}%`, hint: "Selected date range", badge: "bg-teal-50", dot: "bg-teal-500" }].map(({ label, value, hint, badge, dot }) => <Card key={label} className="relative overflow-hidden p-5"><div className="flex items-start justify-between"><p className="text-xs font-medium text-neutral-500">{label}</p><span className={`grid h-9 w-9 place-items-center rounded-xl ${badge}`}><span className={`h-2.5 w-2.5 rounded-full ${dot}`} /></span></div><p className="mt-4 text-[34px] font-semibold leading-none tracking-tight text-black">{value}</p><p className="mt-2 text-[11px] text-neutral-400">{hint}</p></Card>)}
+      {[{ label: "Present staff-days", value: metrics.presentDays, hint: "Selected dates; includes late arrivals", badge: "bg-emerald-50", dot: "bg-emerald-500" }, { label: "Absent staff-days", value: metrics.absentDays, hint: "Scheduled days without attendance", badge: "bg-rose-50", dot: "bg-rose-500" }, { label: "Excused staff-days", value: metrics.excusedDays, hint: "Leave, sick, or holiday", badge: "bg-violet-50", dot: "bg-violet-500" }, { label: "Attendance rate", value: metrics.percentage === null ? "N/A" : `${metrics.percentage}%`, hint: "Selected date range", badge: "bg-teal-50", dot: "bg-teal-500" }].map(({ label, value, hint, badge, dot }) => <Card key={label} className="relative overflow-hidden p-5"><div className="flex items-start justify-between"><p className="text-xs font-medium text-neutral-500">{label}</p><span className={`grid h-9 w-9 place-items-center rounded-xl ${badge}`}><span className={`h-2.5 w-2.5 rounded-full ${dot}`} /></span></div><p className="mt-4 text-[34px] font-semibold leading-none tracking-tight text-black">{value}</p><p className="mt-2 text-[11px] text-neutral-400">{hint}</p></Card>)}
     </div>
     <div className="mb-6">
       <Card>
@@ -338,7 +438,7 @@ export function AttendanceDashboard() {
 
     <Card className="min-w-0 p-0">
       <div className="flex flex-col gap-4 border-b border-neutral-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-        <div><h2 className="font-semibold">Today&apos;s attendance roster</h2><p className="mt-1 text-xs text-neutral-500">One row per staff member. Late arrivals are included in Present and marked beside their check-in.</p><p className="mt-2 text-[11px] text-neutral-400">Present {metrics.presentToday} | Absent {metrics.absentToday} | Excused {metrics.onLeaveToday}</p></div>
+        <div><h2 className="font-semibold">Today&apos;s attendance roster</h2><p className="mt-1 text-xs text-neutral-500">One row per staff member. Late arrivals are included in Present and marked beside their check-in.</p><p className="mt-1 text-[10px] text-neutral-400">Check-in opens 20 minutes before shift start and closes 60 minutes after. Checkout opens 30 minutes before shift end, up to 120 minutes after.</p><p className="mt-2 text-[11px] text-neutral-500">Present {todayRoster.filter(row => row.attended).length} <span className="px-1 text-neutral-300">·</span> Absent {todayRoster.filter(row => row.status === "Absent").length} <span className="px-1 text-neutral-300">·</span> Excused {todayRoster.filter(row => row.excused).length}</p></div>
         <div className="flex gap-2">
           <button onClick={() => downloadExcel(summaries, records, branches, from, to)} disabled={loading || staff.length === 0} className="rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 text-xs font-medium hover:bg-neutral-50 disabled:opacity-40">Export Excel</button>
           <button onClick={() => downloadPdf(summaries, records, branches, from, to)} disabled={loading || staff.length === 0} className="rounded-xl bg-black px-3.5 py-2.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-40">Download PDF</button>
@@ -347,10 +447,10 @@ export function AttendanceDashboard() {
       {loading ? <Loading /> : todayRoster.length === 0 ? <div className="p-10 text-center text-sm text-neutral-500">No active staff found.</div> : <>
         <div className="divide-y divide-neutral-100 md:hidden">
           {todayRoster.map(row => <div key={row.person.id} className="px-4 py-3.5">
-            <div className="flex items-start justify-between gap-3"><button type="button" onClick={() => setSelected(row.person)} className="min-w-0 text-left"><span className="block truncate text-sm font-semibold">{row.person.full_name}</span><span className="mt-0.5 block text-[10px] text-neutral-400">{row.person.staff_code}{branches.find(item => item.id === row.person.branch_id) ? " | " + branches.find(item => item.id === row.person.branch_id)?.name : ""}</span></button><span className={"shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium " + attendanceStatusClass(row.status === "Present" ? "present" : row.status === "Absent" ? "absent" : row.status === "Excused" ? "leave" : "other")}>{row.status}</span></div>
+            <div className="flex items-start justify-between gap-3"><button type="button" onClick={() => setSelected(row.person)} className="min-w-0 text-left"><span className="block truncate text-sm font-semibold">{row.person.full_name}</span><span className="mt-0.5 block text-[10px] text-neutral-400">{row.person.staff_code}{branches.find(item => item.id === row.person.branch_id) ? " | " + branches.find(item => item.id === row.person.branch_id)?.name : ""}</span></button><span className={"shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium " + attendanceStatusClass(row.status)}>{row.status}</span></div>
             {row.sessions.length > 0 ? <div className="mt-3 grid grid-cols-2 gap-3">
-              <div><p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-in</p>{row.sessions.map(session => <p key={session.number} className="py-0.5 text-xs tabular-nums">S{session.number} {formatTime(session.checkIn)}{session.lateMinutes > 0 ? <span className="ml-1 text-[10px] font-medium text-amber-700">Late {session.lateMinutes}m</span> : null}</p>)}</div>
-              <div><p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-out</p>{row.sessions.map(session => <p key={session.number} className="py-0.5 text-xs tabular-nums">S{session.number} {formatTime(session.checkOut)}</p>)}</div>
+              <div><p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-in</p>{row.sessions.map(session => <p key={session.number} className="py-0.5 text-xs tabular-nums">S{session.number} {session.checkIn ? formatTime(session.checkIn) : <span className={`font-medium ${session.scanState === "Absent" ? "text-rose-700" : session.scanState === "Check-in open" ? "text-amber-700" : "text-sky-700"}`}>{session.scanState}</span>}{session.earlyCheckIn > 0 ? <span className="ml-1 text-[10px] font-medium text-sky-700">Early {session.earlyCheckIn}m</span> : session.lateMinutes > 0 ? <span className="ml-1 text-[10px] font-medium text-amber-700">Late {session.lateMinutes}m</span> : null}</p>)}</div>
+              <div><p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-out</p>{row.sessions.map(session => <p key={session.number} className="py-0.5 text-xs tabular-nums">S{session.number} {session.checkOut ? formatTime(session.checkOut) : session.checkoutState ? <span className={`font-medium ${session.checkoutState === "Checkout window open" ? "text-amber-700" : session.checkoutState === "No check-out" ? "text-orange-700" : "text-sky-700"}`}>{session.checkoutState}</span> : "—"}{session.earlyCheckOut > 0 ? <span className="ml-1 text-[10px] font-medium text-orange-700">Left early {session.earlyCheckOut}m</span> : null}</p>)}</div>
             </div> : <p className="mt-2 text-xs text-neutral-400">No shift scheduled today</p>}
           </div>)}
         </div>
@@ -359,9 +459,9 @@ export function AttendanceDashboard() {
           <tbody className="divide-y divide-neutral-100">{todayRoster.map(row => <tr key={row.person.id} className="hover:bg-neutral-50">
             <td className="px-4 py-3.5"><button type="button" onClick={() => setSelected(row.person)} className="text-left"><span className="block font-medium text-neutral-900">{row.person.full_name}</span><span className="mt-0.5 block text-[10px] text-neutral-400">{row.person.staff_code}</span></button></td>
             <td className="px-4 py-3.5">{row.sessions.length ? row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">S{session.number} {session.schedule}</p>) : <span className="text-neutral-400">No shift</span>}</td>
-            <td className="px-4 py-3.5">{row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">{formatTime(session.checkIn)}{session.lateMinutes > 0 ? <span className="ml-1 text-[10px] font-medium text-amber-700">Late {session.lateMinutes}m</span> : null}</p>)}</td>
-            <td className="px-4 py-3.5">{row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">{formatTime(session.checkOut)}</p>)}</td>
-            <td className="px-4 py-3.5"><span className={"rounded-full px-2.5 py-1 text-[10px] font-medium " + attendanceStatusClass(row.status === "Present" ? "present" : row.status === "Absent" ? "absent" : row.status === "Excused" ? "leave" : "other")}>{row.status}</span></td>
+            <td className="px-4 py-3.5">{row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">{session.checkIn ? formatTime(session.checkIn) : <span className={`font-medium ${session.scanState === "Absent" ? "text-rose-700" : session.scanState === "Check-in open" ? "text-amber-700" : "text-sky-700"}`}>{session.scanState}</span>}{session.earlyCheckIn > 0 ? <span className="ml-1 text-[10px] font-medium text-sky-700">Early {session.earlyCheckIn}m</span> : session.lateMinutes > 0 ? <span className="ml-1 text-[10px] font-medium text-amber-700">Late {session.lateMinutes}m</span> : null}</p>)}</td>
+            <td className="px-4 py-3.5">{row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">{session.checkOut ? formatTime(session.checkOut) : <span className={`font-medium ${session.checkoutState === "Checkout window open" ? "text-amber-700" : session.checkoutState === "No check-out" ? "text-orange-700" : "text-neutral-500"}`}>{session.checkoutState ?? "—"}</span>}{session.earlyCheckOut > 0 ? <span className="ml-1 text-[10px] font-medium text-orange-700">Left early {session.earlyCheckOut}m</span> : null}</p>)}</td>
+            <td className="px-4 py-3.5"><span className={"rounded-full px-2.5 py-1 text-[10px] font-medium " + attendanceStatusClass(row.status)}>{row.status}</span></td>
           </tr>)}</tbody>
         </table></div>
       </>}
@@ -382,12 +482,12 @@ export function AttendanceDashboard() {
       {loading ? <Loading /> : pagedAttendanceRows.length === 0 ? <div className="p-10 text-center text-sm text-neutral-500">No attendance records match these filters.</div> : <>
         <div className="divide-y divide-neutral-100 md:hidden">
           {pagedAttendanceRows.map(row => <button key={row.key} type="button" onClick={() => setSelected(row.person)} className="w-full px-4 py-3.5 text-left transition hover:bg-neutral-50">
-            <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold">{row.person.full_name}</p><p className="mt-0.5 truncate text-[11px] text-neutral-500">{row.person.staff_code} · Shift {row.shiftNumber} · {new Date(`${row.date}T00:00:00Z`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(attendanceState(row.status))}`}>{attendanceState(row.status)}</span></div>
-            <div className="mt-2 grid grid-cols-2 gap-3 text-xs"><p><span className="text-[10px] uppercase tracking-wide text-neutral-400">In </span><span className="font-medium tabular-nums">{formatTime(row.checkIn)}</span></p><p><span className="text-[10px] uppercase tracking-wide text-neutral-400">Out </span><span className="font-medium tabular-nums">{formatTime(row.checkOut)}</span></p></div>
+            <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold">{row.person.full_name}</p><p className="mt-0.5 truncate text-[11px] text-neutral-500">{row.person.staff_code} · Shift {row.shiftNumber} · {new Date(`${row.date}T00:00:00Z`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(rowAttendanceState(row, nowMs))}`}>{rowAttendanceState(row, nowMs)}</span></div>
+            <div className="mt-2 grid grid-cols-2 gap-3 text-xs"><p><span className="text-[10px] uppercase tracking-wide text-neutral-400">In </span><span className="font-medium tabular-nums">{formatTime(row.checkIn)}</span>{recordTiming(row).earlyCheckIn > 0 ? <span className="ml-1 block text-[10px] font-medium text-sky-700">Early {recordTiming(row).earlyCheckIn}m</span> : row.lateMinutes > 0 ? <span className="ml-1 block text-[10px] font-medium text-amber-700">Late {row.lateMinutes}m</span> : null}</p><p><span className="text-[10px] uppercase tracking-wide text-neutral-400">Out </span><span className="font-medium tabular-nums">{formatTime(row.checkOut)}</span>{recordTiming(row).earlyCheckOut > 0 && <span className="ml-1 block text-[10px] font-medium text-orange-700">Left early {recordTiming(row).earlyCheckOut}m</span>}</p></div>
             {row.lateMinutes > 0 && <p className="mt-1 text-[10px] font-medium text-amber-700">{row.lateMinutes} minutes late</p>}
           </button>)}
         </div>
-        <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[980px] text-left text-xs"><thead className="bg-neutral-50 text-[10px] uppercase tracking-wide text-neutral-400"><tr>{["Date", "Staff", "Branch", "Shift", "Check-in", "Check-out", "Status", "Late", "Source"].map(label => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead><tbody className="divide-y divide-neutral-100">{pagedAttendanceRows.map(row => <tr key={row.key} tabIndex={0} role="button" onClick={() => setSelected(row.person)} onKeyDown={event => { if (event.key === "Enter") setSelected(row.person); }} className="cursor-pointer transition hover:bg-neutral-50"><td className="whitespace-nowrap px-4 py-3.5 tabular-nums">{row.date}</td><td className="px-4 py-3.5"><p className="font-medium text-neutral-900">{row.person.full_name}</p><p className="mt-0.5 text-[10px] text-neutral-400">{row.person.staff_code}</p></td><td className="max-w-40 truncate px-4 py-3.5">{branches.find(item => item.id === row.person.branch_id)?.name ?? "-"}</td><td className="px-4 py-3.5">Shift {row.shiftNumber}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkIn)}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkOut)}</td><td className="px-4 py-3.5"><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(attendanceState(row.status))}`}>{attendanceState(row.status)}</span></td><td className="px-4 py-3.5">{row.lateMinutes ? `${row.lateMinutes} min` : "-"}</td><td className="px-4 py-3.5 capitalize">{row.source}</td></tr>)}</tbody></table></div>
+        <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[980px] text-left text-xs"><thead className="bg-neutral-50 text-[10px] uppercase tracking-wide text-neutral-400"><tr>{["Date", "Staff", "Branch", "Shift", "Check-in", "Check-out", "Status", "Late", "Source"].map(label => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead><tbody className="divide-y divide-neutral-100">{pagedAttendanceRows.map(row => <tr key={row.key} tabIndex={0} role="button" onClick={() => setSelected(row.person)} onKeyDown={event => { if (event.key === "Enter") setSelected(row.person); }} className="cursor-pointer transition hover:bg-neutral-50"><td className="whitespace-nowrap px-4 py-3.5 tabular-nums">{row.date}</td><td className="px-4 py-3.5"><p className="font-medium text-neutral-900">{row.person.full_name}</p><p className="mt-0.5 text-[10px] text-neutral-400">{row.person.staff_code}</p></td><td className="max-w-40 truncate px-4 py-3.5">{branches.find(item => item.id === row.person.branch_id)?.name ?? "-"}</td><td className="px-4 py-3.5">Shift {row.shiftNumber}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkIn)}{recordTiming(row).earlyCheckIn > 0 ? <span className="ml-1 text-[10px] font-medium text-sky-700">Early {recordTiming(row).earlyCheckIn}m</span> : null}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkOut)}{recordTiming(row).earlyCheckOut > 0 ? <span className="ml-1 text-[10px] font-medium text-orange-700">Left early {recordTiming(row).earlyCheckOut}m</span> : null}</td><td className="px-4 py-3.5"><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(rowAttendanceState(row, nowMs))}`}>{rowAttendanceState(row, nowMs)}</span></td><td className="px-4 py-3.5">{row.lateMinutes ? `${row.lateMinutes} min` : "-"}</td><td className="px-4 py-3.5 capitalize">{row.source}</td></tr>)}</tbody></table></div>
         <div className="flex flex-col gap-2 border-t border-neutral-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-[11px] text-neutral-500">Showing {Math.min(filteredAttendanceRows.length, (recordPage - 1) * recordsPerPage + 1)}-{Math.min(filteredAttendanceRows.length, recordPage * recordsPerPage)} of {filteredAttendanceRows.length}</p><div className="flex gap-2"><button type="button" onClick={() => setRecordPage(page => Math.max(1, page - 1))} disabled={recordPage <= 1} className="rounded-lg border border-neutral-200 px-3 py-2 text-xs font-medium disabled:opacity-40">Previous</button><span className="self-center px-2 text-xs text-neutral-500">Page {recordPage} of {recordPageCount}</span><button type="button" onClick={() => setRecordPage(page => Math.min(recordPageCount, page + 1))} disabled={recordPage >= recordPageCount} className="rounded-lg border border-neutral-200 px-3 py-2 text-xs font-medium disabled:opacity-40">Next</button></div></div>
       </>}
     </Card>
