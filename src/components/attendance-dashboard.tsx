@@ -7,7 +7,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon } from "@hugeicons/core-free-icons";
 import { localDateInTimezone, WEEKEND_DAYS } from "../../shared/attendance-rules";
 
-type Staff = { id: string; full_name: string; staff_code: string; status: string; branch_id: string; annual_leave_days?: number; grace_minutes?: number; scheduled_shifts?: { start: string; end: string; day?: number }[]; shift_start?: string; shift_end?: string };
+type Staff = { id: string; full_name: string; staff_code: string; status: string; branch_id: string; department?: string | null; annual_leave_days?: number; grace_minutes?: number; scheduled_shifts?: { start: string; end: string; day?: number }[]; shift_start?: string; shift_end?: string };
 type Holiday = { id: string; date: string; name: string; branch_id: string | null };
 type LeaveRequest = { staff_id: string; start_date: string; end_date: string; status: string };
 type Attendance = {
@@ -19,7 +19,7 @@ type Attendance = {
 };
 type AttendanceSelfie = { id: string; attendance_id: string; kind: "check_in" | "check_out"; review_status: "pending" | "approved" | "rejected"; review_note: string | null; created_at: string; preview_url: string | null; download_url: string | null };
 type Branch = { id: string; name: string };
-type AttendanceTableRow = { key: string; person: Staff; date: string; shiftNumber: number; checkIn: string | null; checkOut: string | null; status: string; lateMinutes: number; source: string; note: string | null };
+type AttendanceTableRow = { key: string; person: Staff; date: string; shiftNumber: number; schedule: string; checkIn: string | null; checkOut: string | null; status: string; lateMinutes: number; source: string; note: string | null };
 type AttendanceSummary = { person: Staff; entries: Attendance[]; daysPresent: number; daysLate: number; daysLeave: number; daysSick: number; daysHoliday: number; daysAbsent: number; lateMinutes: number; percentage: number; expectedDays: number };
 const today = localDateInTimezone();
 const MINUTE_MS = 60_000;
@@ -127,12 +127,12 @@ function downloadBlob(blob: Blob, name: string) {
 function excelCell(value: unknown) { return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function downloadExcel(summaries: AttendanceSummary[], records: Attendance[], branches: Branch[], from: string, to: string) {
   const makeTable = (headings: unknown[], rows: unknown[][]) => [headings, ...rows].map((row, index) => `<tr>${row.map(value => `<${index ? "td" : "th"}>${excelCell(value)}</${index ? "td" : "th"}>`).join("")}</tr>`).join("");
-  const summaryHeadings = ["Staff name", "Staff code", "Branch", "Present days (includes late)", "Absent workdays", "Leave days", "Sick days", "Holiday days", "Late minutes", "Attendance rate"];
-  const summaryRows = summaries.map(summary => [summary.person.full_name, summary.person.staff_code, branches.find(item => item.id === summary.person.branch_id)?.name ?? "", summary.daysPresent, summary.daysAbsent, summary.daysLeave, summary.daysSick, summary.daysHoliday, summary.lateMinutes, `${summary.percentage}%`]);
-  const detailsHeading = ["Date", "Staff name", "Staff code", "Branch", "Shift", "Check-in", "Check-out", "Status", "Late minutes", "Source", "Notes"];
+  const summaryHeadings = ["Staff name", "Staff code", "Department", "Branch", "Present days (includes late)", "Absent workdays", "Leave days", "Sick days", "Holiday days", "Late minutes", "Attendance rate"];
+  const summaryRows = summaries.map(summary => [summary.person.full_name, summary.person.staff_code, summary.person.department?.trim() || "Unassigned", branches.find(item => item.id === summary.person.branch_id)?.name ?? "", summary.daysPresent, summary.daysAbsent, summary.daysLeave, summary.daysSick, summary.daysHoliday, summary.lateMinutes, `${summary.percentage}%`]);
+  const detailsHeading = ["Date", "Staff name", "Staff code", "Department", "Branch", "Shift", "Check-in", "Check-out", "Status", "Late minutes", "Source", "Notes"];
   const detailRows = records.map(record => {
     const summary = summaries.find(item => item.person.id === record.staff_id);
-    return [record.date, summary?.person.full_name ?? record.staff_id, summary?.person.staff_code ?? "", branches.find(item => item.id === summary?.person.branch_id)?.name ?? record.staff?.branches?.name ?? "", record.shift_number ?? 1, formatTime(record.check_in_at), formatTime(record.check_out_at), attendanceState(record.status), record.late_minutes, record.source, record.note ?? ""];
+    return [record.date, summary?.person.full_name ?? record.staff_id, summary?.person.staff_code ?? "", summary?.person.department?.trim() || "Unassigned", branches.find(item => item.id === summary?.person.branch_id)?.name ?? record.staff?.branches?.name ?? "", record.shift_number ?? 1, formatTime(record.check_in_at), formatTime(record.check_out_at), attendanceState(record.status), record.late_minutes, record.source, record.note ?? ""];
   });
   const html = `<html><head><meta charset="utf-8"></head><body><h2>Attendance summary · ${excelCell(from)} to ${excelCell(to)}</h2><table>${makeTable(summaryHeadings, summaryRows)}</table><br><h2>Recorded check-in details</h2><table>${makeTable(detailsHeading, detailRows)}</table></body></html>`;
   downloadBlob(new Blob(["\ufeff", html], { type: "application/vnd.ms-excel;charset=utf-8" }), `xaadir-staff-attendance-${from}-to-${to}.xls`);
@@ -140,10 +140,10 @@ function downloadExcel(summaries: AttendanceSummary[], records: Attendance[], br
 function downloadPdf(summaries: AttendanceSummary[], records: Attendance[], branches: Branch[], from: string, to: string) {
   const clean = (value: unknown) => String(value ?? "").normalize("NFKD").replace(/[^\x20-\x7E]/g, "-").replace(/[\\()]/g, "\\$&");
   const pad = (value: unknown, size: number) => String(value ?? "").slice(0, size).padEnd(size, " ");
-  const lines = [`XAADIR - STAFF ATTENDANCE SUMMARY`, `Period: ${from} to ${to}`, `Staff listed: ${summaries.length} | Recorded check-in rows: ${records.length}`, "", "STAFF                 CODE       BRANCH           PRESENT ABSENT LEAVE SICK HOLIDAY RATE", "-----------------------------------------------------------------------------------------------"];
+  const lines = [`XAADIR - STAFF ATTENDANCE SUMMARY`, `Period: ${from} to ${to}`, `Staff listed: ${summaries.length} | Recorded check-in rows: ${records.length}`, "", "STAFF                 CODE       DEPARTMENT       BRANCH           PRESENT ABSENT LEAVE SICK HOLIDAY RATE", "-------------------------------------------------------------------------------------------------------------"];
   for (const summary of summaries) {
     const branchName = branches.find(item => item.id === summary.person.branch_id)?.name ?? "";
-    lines.push(`${pad(summary.person.full_name, 21)} ${pad(summary.person.staff_code, 10)} ${pad(branchName, 16)} ${String(summary.daysPresent).padStart(7)} ${String(summary.daysAbsent).padStart(5)} ${String(summary.daysLeave).padStart(4)} ${String(summary.daysSick).padStart(3)} ${String(summary.daysHoliday).padStart(7)} ${String(summary.percentage).padStart(3)}%`);
+    lines.push(`${pad(summary.person.full_name, 21)} ${pad(summary.person.staff_code, 10)} ${pad(summary.person.department?.trim() || "Unassigned", 16)} ${pad(branchName, 16)} ${String(summary.daysPresent).padStart(7)} ${String(summary.daysAbsent).padStart(5)} ${String(summary.daysLeave).padStart(4)} ${String(summary.daysSick).padStart(3)} ${String(summary.daysHoliday).padStart(7)} ${String(summary.percentage).padStart(3)}%`);
   }
   lines.push("", "RECORDED CHECK-IN DETAILS", "DATE       STAFF                 CODE        SHIFT CHECK-IN  CHECK-OUT STATUS       LATE");
   for (const record of records) {
@@ -179,6 +179,7 @@ export function AttendanceDashboard() {
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [from, setFrom] = useState(today), [to, setTo] = useState(today), [branch, setBranch] = useState("");
+  const [department, setDepartment] = useState("");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [recordSearch, setRecordSearch] = useState("");
   const [recordStatus, setRecordStatus] = useState("all");
@@ -226,6 +227,12 @@ export function AttendanceDashboard() {
     void load();
     return () => { active = false; };
   }, [from, to, branch]);
+  const departmentOptions = useMemo(() => [...new Set(staff.map(person => person.department?.trim() || "").filter(Boolean))].sort((a, b) => a.localeCompare(b)), [staff]);
+  const hasUnassignedDepartment = staff.some(person => !person.department?.trim());
+  const displayedStaff = useMemo(() => staff.filter(person => {
+    if (!department) return true;
+    return department === "__unassigned__" ? !person.department?.trim() : person.department?.trim() === department;
+  }), [staff, department]);
   const workDates = useCallback((start: string, end: string, person?: Staff) => {
     const dates: string[] = []; const d = new Date(`${start}T00:00:00Z`), last = new Date(`${end}T00:00:00Z`);
     while (d <= last) { const date = d.toISOString().slice(0, 10); const weekday = d.getUTCDay(); const holiday = holidays.some(item => item.date === date && (item.branch_id === null || item.branch_id === person?.branch_id)); const schedule = person?.scheduled_shifts ?? []; const scheduled = schedule.some(shift => shift.day !== undefined) ? schedule.some(shift => shift.day === weekday) : schedule.length > 0 || Boolean(person?.shift_start && person?.shift_end); if (!WEEKEND_DAYS.includes(weekday as 5) && scheduled && !holiday) dates.push(date); d.setUTCDate(d.getUTCDate() + 1); }
@@ -238,7 +245,7 @@ export function AttendanceDashboard() {
     const recordedExcused = new Set(rangeRecords.filter(record => ["leave", "sick", "holiday"].includes(record.status)).map(record => `${record.staff_id}:${record.date}`));
     const scheduledKeys = new Set<string>();
     const expectedKeys = new Set<string>();
-    for (const person of staff) {
+    for (const person of displayedStaff) {
       for (const date of workDates(from, end, person)) {
         const key = `${person.id}:${date}`;
         scheduledKeys.add(key);
@@ -250,7 +257,7 @@ export function AttendanceDashboard() {
     }
     // Count actual attendance even when the staff schedule is missing, the shift is
     // an exception, or the company records work on its configured weekend day.
-    const activeStaffIds = new Set(staff.map(person => person.id));
+    const activeStaffIds = new Set(displayedStaff.map(person => person.id));
     const presentKeys = new Set([...recordedPresent].filter(key => activeStaffIds.has(key.slice(0, key.indexOf(":")))));
     const excusedKeys = new Set([...scheduledKeys].filter(key => {
       if (presentKeys.has(key)) return false;
@@ -268,8 +275,8 @@ export function AttendanceDashboard() {
       if (!presentKeys.has(key) && !excusedKeys.has(key)) absentDays += 1;
     }
     return { presentDays: presentKeys.size, absentDays, excusedDays: excusedKeys.size, percentage: denominator ? Math.round(presentKeys.size / denominator * 100) : null };
-  }, [records, staff, leaveRequests, from, to, nowMs, workDates]);
-  const todayRoster = useMemo(() => staff.map(person => {
+  }, [records, displayedStaff, leaveRequests, from, to, nowMs, workDates]);
+  const todayRoster = useMemo(() => displayedStaff.map(person => {
     const entries = todayRecords.filter(record => record.staff_id === person.id);
     const attended = entries.some(record => ["present", "late", "manual"].includes(record.status));
     const excused = entries.some(record => ["leave", "sick", "holiday"].includes(record.status));
@@ -290,8 +297,8 @@ export function AttendanceDashboard() {
     const allShiftsExplicitlyAbsent = shifts.length > 0 && sessions.every(session => session.scanState === "Absent");
     const status = attended ? "Present" : excused ? "Excused" : allShiftsExplicitlyAbsent ? "Absent" : noScanDayState(today, shifts, nowMs);
     return { person, entries, sessions, attended, excused, status, lateMinutes: sessions.reduce((sum, session) => sum + session.lateMinutes, 0) };
-  }).sort((a, b) => Number(b.attended) - Number(a.attended) || a.person.full_name.localeCompare(b.person.full_name)), [staff, todayRecords, nowMs]);
-  const summaries = useMemo(() => staff.map(person => {
+  }).sort((a, b) => Number(b.attended) - Number(a.attended) || a.person.full_name.localeCompare(b.person.full_name)), [displayedStaff, todayRecords, nowMs]);
+  const summaries = useMemo(() => displayedStaff.map(person => {
     const entries = records.filter(record => record.staff_id === person.id);
     const daysPresent = new Set(entries.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.date)).size;
     const daysLate = new Set(entries.filter(record => record.status === "late").map(record => record.date)).size;
@@ -304,16 +311,18 @@ export function AttendanceDashboard() {
     const daysAbsent = working.filter(date => date < today && !attendedDates.has(date) && !entries.some(record => record.date === date && ["leave", "sick", "holiday"].includes(record.status))).length;
     const attendedDays = attendedDates.size;
     return { person, entries, daysPresent, daysLate, daysLeave, daysSick, daysHoliday, daysAbsent, missingDates, lateMinutes, expectedDays: divisor, percentage: divisor ? Math.round(attendedDays / divisor * 100) : 0 };
-  }), [staff, records, from, to, workDates]);
+  }), [displayedStaff, records, from, to, workDates]);
   const attendanceRows = useMemo<AttendanceTableRow[]>(() => {
-    const activeStaff = new Map(staff.map(person => [person.id, person]));
+    const activeStaff = new Map(displayedStaff.map(person => [person.id, person]));
     const rows: AttendanceTableRow[] = records.flatMap(record => {
       const person = activeStaff.get(record.staff_id);
-      return person ? [{ key: record.id, person, date: record.date, shiftNumber: record.shift_number ?? 1, checkIn: record.check_in_at, checkOut: record.check_out_at, status: record.status, lateMinutes: record.late_minutes ?? 0, source: record.source, note: record.note }] : [];
+      const shiftNumber = record.shift_number ?? 1;
+      const scheduled = person ? shiftsForDate(person, record.date)[shiftNumber - 1] : null;
+      return person ? [{ key: record.id, person, date: record.date, shiftNumber, schedule: scheduled ? `${scheduled.start.slice(0, 5)}-${scheduled.end.slice(0, 5)}` : "Schedule unavailable", checkIn: record.check_in_at, checkOut: record.check_out_at, status: record.status, lateMinutes: record.late_minutes ?? 0, source: record.source, note: record.note }] : [];
     });
     const end = to > today ? today : to;
     if (from <= end) {
-      for (const person of staff) {
+      for (const person of displayedStaff) {
         const dates = workDates(from, end, person);
         for (const date of dates) {
           const shifts = shiftsForDate(person, date);
@@ -326,6 +335,7 @@ export function AttendanceDashboard() {
               person,
               date,
               shiftNumber,
+              schedule: `${shifts[index].start.slice(0, 5)}-${shifts[index].end.slice(0, 5)}`,
               checkIn: null,
               checkOut: null,
               status: date === today ? "Not checked in" : "Absent",
@@ -338,7 +348,7 @@ export function AttendanceDashboard() {
       }
     }
     return rows.sort((a, b) => b.date.localeCompare(a.date) || a.person.full_name.localeCompare(b.person.full_name) || a.shiftNumber - b.shiftNumber);
-  }, [records, staff, from, to, workDates]);
+  }, [records, displayedStaff, from, to, workDates]);
   const filteredAttendanceRows = useMemo(() => attendanceRows.filter(row => {
     const query = recordSearch.trim().toLowerCase();
     const matchesSearch = !query || row.person.full_name.toLowerCase().includes(query) || row.person.staff_code.toLowerCase().includes(query);
@@ -353,7 +363,7 @@ export function AttendanceDashboard() {
   const recordsPerPage = 20;
   const recordPageCount = Math.max(1, Math.ceil(filteredAttendanceRows.length / recordsPerPage));
   const pagedAttendanceRows = filteredAttendanceRows.slice((recordPage - 1) * recordsPerPage, recordPage * recordsPerPage);
-  useEffect(() => setRecordPage(1), [from, to, branch]);
+  useEffect(() => setRecordPage(1), [from, to, branch, department]);
   const selectedSummary = selected ? summaries.find(item => item.person.id === selected.id) : null;
   useEffect(() => {
     if (!selected) { setSelectedHistory([]); setSelfiesError(""); return; }
@@ -398,10 +408,11 @@ export function AttendanceDashboard() {
     const day = new Date(`${today}T12:00:00Z`);
     day.setUTCDate(day.getUTCDate() - (6 - index));
     const date = day.toISOString().slice(0, 10);
-    const dayRecords = weeklyRecords.filter(record => record.date === date);
+    const scopedIds = new Set(displayedStaff.map(person => person.id));
+    const dayRecords = weeklyRecords.filter(record => record.date === date && scopedIds.has(record.staff_id));
     const presentIds = new Set(dayRecords.filter(record => ["present", "late", "manual"].includes(record.status)).map(record => record.staff_id));
     const excusedIds = new Set(dayRecords.filter(record => ["leave", "sick", "holiday"].includes(record.status)).map(record => record.staff_id));
-    const scheduled = staff.filter(person => workDates(date, date, person).length > 0);
+    const scheduled = displayedStaff.filter(person => workDates(date, date, person).length > 0);
     const absent = date < today
       ? scheduled.filter(person => !presentIds.has(person.id) && !excusedIds.has(person.id)).length
       : date === today
@@ -414,7 +425,7 @@ export function AttendanceDashboard() {
   return <><PageHeading eyebrow="Workforce insights" title="Attendance" description="Daily visibility into check-ins, punctuality and attendance patterns." action={<a href="/attendance/manual" className="inline-flex items-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800"><HugeiconsIcon icon={Add01Icon} size={17} strokeWidth={2} />Manual entry</a>} />
     {error && <div className="mb-4"><Notice error>{error}</Notice></div>}
     <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-4 py-3 text-[10px] text-neutral-600 shadow-sm"><span className="mr-1 font-medium">Attendance status</span>{[['Present · includes late','bg-emerald-100 text-emerald-700'],['Absent','bg-rose-100 text-rose-700'],['Excused','bg-violet-100 text-violet-700'],['No record yet','bg-neutral-100 text-neutral-700']].map(([label,style])=><span key={label} className={`rounded-full px-2.5 py-1 font-medium ${style}`}>{label}</span>)}</div>
-    <Card className="mb-6"><div className="flex flex-col gap-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Attendance overview</h2><p className="mt-1 text-xs text-slate-500">Choose a quick range or customize dates.</p></div><div className="flex flex-wrap rounded-xl bg-neutral-100 p-1">{[["Today","today"],["Yesterday","yesterday"],["This week","week"],["This month","month"]].map(([label,value])=><button key={value} onClick={()=>setPreset(value as "today"|"yesterday"|"week"|"month")} className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${isPresetActive(value as "today"|"yesterday"|"week"|"month")?"bg-white text-black shadow-sm":"text-neutral-500 hover:text-black"}`}>{label}</button>)}</div></div><div className="grid grid-cols-2 gap-3 md:flex md:items-end"><label className="space-y-1 text-[11px] font-medium text-slate-500">From<Input type="date" value={from} max={to} onChange={event => setFrom(event.target.value)} /></label><label className="space-y-1 text-[11px] font-medium text-slate-500">To<Input type="date" value={to} min={from} onChange={event => setTo(event.target.value)} /></label><label className="space-y-1 text-[11px] font-medium text-slate-500 md:min-w-44">Branch<select className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm" value={branch} onChange={event => setBranch(event.target.value)}><option value="">All branches</option>{branches.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></div></Card>
+    <Card className="mb-6"><div className="flex flex-col gap-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Attendance overview</h2><p className="mt-1 text-xs text-slate-500">Choose a date range, branch, or department.</p></div><div className="flex flex-wrap rounded-xl bg-neutral-100 p-1">{[["Today","today"],["Yesterday","yesterday"],["This week","week"],["This month","month"]].map(([label,value])=><button key={value} onClick={()=>setPreset(value as "today"|"yesterday"|"week"|"month")} className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${isPresetActive(value as "today"|"yesterday"|"week"|"month")?"bg-white text-black shadow-sm":"text-neutral-500 hover:text-black"}`}>{label}</button>)}</div></div><div className="grid grid-cols-2 gap-3 md:grid-cols-4"><label className="space-y-1 text-[11px] font-medium text-slate-500">From<Input type="date" value={from} max={to} onChange={event => setFrom(event.target.value)} /></label><label className="space-y-1 text-[11px] font-medium text-slate-500">To<Input type="date" value={to} min={from} onChange={event => setTo(event.target.value)} /></label><label className="space-y-1 text-[11px] font-medium text-slate-500">Branch<select className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm" value={branch} onChange={event => setBranch(event.target.value)}><option value="">All branches</option>{branches.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="space-y-1 text-[11px] font-medium text-slate-500">Department<select className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm" value={department} onChange={event => { setDepartment(event.target.value); setRecordPage(1); }}><option value="">All departments</option>{departmentOptions.map(item => <option key={item} value={item}>{item}</option>)}{hasUnassignedDepartment && <option value="__unassigned__">Unassigned</option>}</select></label></div></div></Card>
     <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {[{ label: "Present staff-days", value: metrics.presentDays, hint: "Selected dates; includes late arrivals", badge: "bg-emerald-50", dot: "bg-emerald-500" }, { label: "Absent staff-days", value: metrics.absentDays, hint: "Scheduled days without attendance", badge: "bg-rose-50", dot: "bg-rose-500" }, { label: "Excused staff-days", value: metrics.excusedDays, hint: "Leave, sick, or holiday", badge: "bg-violet-50", dot: "bg-violet-500" }, { label: "Attendance rate", value: metrics.percentage === null ? "N/A" : `${metrics.percentage}%`, hint: "Selected date range", badge: "bg-teal-50", dot: "bg-teal-500" }].map(({ label, value, hint, badge, dot }) => <Card key={label} className="relative overflow-hidden p-5"><div className="flex items-start justify-between"><p className="text-xs font-medium text-neutral-500">{label}</p><span className={`grid h-9 w-9 place-items-center rounded-xl ${badge}`}><span className={`h-2.5 w-2.5 rounded-full ${dot}`} /></span></div><p className="mt-4 text-[34px] font-semibold leading-none tracking-tight text-black">{value}</p><p className="mt-2 text-[11px] text-neutral-400">{hint}</p></Card>)}
     </div>
@@ -440,14 +451,14 @@ export function AttendanceDashboard() {
       <div className="flex flex-col gap-4 border-b border-neutral-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <div><h2 className="font-semibold">Today&apos;s attendance roster</h2><p className="mt-1 text-xs text-neutral-500">One row per staff member. Late arrivals are included in Present and marked beside their check-in.</p><p className="mt-1 text-[10px] text-neutral-400">Check-in opens 20 minutes before shift start and closes 60 minutes after. Checkout opens 30 minutes before shift end, up to 120 minutes after.</p><p className="mt-2 text-[11px] text-neutral-500">Present {todayRoster.filter(row => row.attended).length} <span className="px-1 text-neutral-300">·</span> Absent {todayRoster.filter(row => row.status === "Absent").length} <span className="px-1 text-neutral-300">·</span> Excused {todayRoster.filter(row => row.excused).length}</p></div>
         <div className="flex gap-2">
-          <button onClick={() => downloadExcel(summaries, records, branches, from, to)} disabled={loading || staff.length === 0} className="rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 text-xs font-medium hover:bg-neutral-50 disabled:opacity-40">Export Excel</button>
-          <button onClick={() => downloadPdf(summaries, records, branches, from, to)} disabled={loading || staff.length === 0} className="rounded-xl bg-black px-3.5 py-2.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-40">Download PDF</button>
+          <button onClick={() => downloadExcel(summaries, records.filter(record => displayedStaff.some(person => person.id === record.staff_id)), branches, from, to)} disabled={loading || displayedStaff.length === 0} className="rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 text-xs font-medium hover:bg-neutral-50 disabled:opacity-40">Export Excel</button>
+          <button onClick={() => downloadPdf(summaries, records.filter(record => displayedStaff.some(person => person.id === record.staff_id)), branches, from, to)} disabled={loading || displayedStaff.length === 0} className="rounded-xl bg-black px-3.5 py-2.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-40">Download PDF</button>
         </div>
       </div>
       {loading ? <Loading /> : todayRoster.length === 0 ? <div className="p-10 text-center text-sm text-neutral-500">No active staff found.</div> : <>
         <div className="divide-y divide-neutral-100 md:hidden">
           {todayRoster.map(row => <div key={row.person.id} className="px-4 py-3.5">
-            <div className="flex items-start justify-between gap-3"><button type="button" onClick={() => setSelected(row.person)} className="min-w-0 text-left"><span className="block truncate text-sm font-semibold">{row.person.full_name}</span><span className="mt-0.5 block text-[10px] text-neutral-400">{row.person.staff_code}{branches.find(item => item.id === row.person.branch_id) ? " | " + branches.find(item => item.id === row.person.branch_id)?.name : ""}</span></button><span className={"shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium " + attendanceStatusClass(row.status)}>{row.status}</span></div>
+            <div className="flex items-start justify-between gap-3"><button type="button" onClick={() => setSelected(row.person)} className="min-w-0 text-left"><span className="block truncate text-sm font-semibold">{row.person.full_name}</span><span className="mt-0.5 block text-[10px] text-neutral-400">{row.person.staff_code}{row.person.department ? ` · ${row.person.department}` : ""}{branches.find(item => item.id === row.person.branch_id) ? " · " + branches.find(item => item.id === row.person.branch_id)?.name : ""}</span></button><span className={"shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium " + attendanceStatusClass(row.status)}>{row.status}</span></div>
             {row.sessions.length > 0 ? <div className="mt-3 grid grid-cols-2 gap-3">
               <div><p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-in</p>{row.sessions.map(session => <p key={session.number} className="py-0.5 text-xs tabular-nums">S{session.number} {session.checkIn ? formatTime(session.checkIn) : <span className={`font-medium ${session.scanState === "Absent" ? "text-rose-700" : session.scanState === "Check-in open" ? "text-amber-700" : "text-sky-700"}`}>{session.scanState}</span>}{session.earlyCheckIn > 0 ? <span className="ml-1 text-[10px] font-medium text-sky-700">Early {session.earlyCheckIn}m</span> : session.lateMinutes > 0 ? <span className="ml-1 text-[10px] font-medium text-amber-700">Late {session.lateMinutes}m</span> : null}</p>)}</div>
               <div><p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400">Check-out</p>{row.sessions.map(session => <p key={session.number} className="py-0.5 text-xs tabular-nums">S{session.number} {session.checkOut ? formatTime(session.checkOut) : session.checkoutState ? <span className={`font-medium ${session.checkoutState === "Checkout window open" ? "text-amber-700" : session.checkoutState === "No check-out" ? "text-orange-700" : "text-sky-700"}`}>{session.checkoutState}</span> : "—"}{session.earlyCheckOut > 0 ? <span className="ml-1 text-[10px] font-medium text-orange-700">Left early {session.earlyCheckOut}m</span> : null}</p>)}</div>
@@ -457,7 +468,7 @@ export function AttendanceDashboard() {
         <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[900px] text-left text-xs">
           <thead className="bg-neutral-50 text-[10px] uppercase tracking-wide text-neutral-400"><tr>{["Staff member", "Scheduled shifts", "Check-in", "Check-out", "Attendance"].map(label => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead>
           <tbody className="divide-y divide-neutral-100">{todayRoster.map(row => <tr key={row.person.id} className="hover:bg-neutral-50">
-            <td className="px-4 py-3.5"><button type="button" onClick={() => setSelected(row.person)} className="text-left"><span className="block font-medium text-neutral-900">{row.person.full_name}</span><span className="mt-0.5 block text-[10px] text-neutral-400">{row.person.staff_code}</span></button></td>
+            <td className="px-4 py-3.5"><button type="button" onClick={() => setSelected(row.person)} className="text-left"><span className="block font-medium text-neutral-900">{row.person.full_name}</span><span className="mt-0.5 block text-[10px] text-neutral-400">{row.person.staff_code}{row.person.department ? ` · ${row.person.department}` : ""}</span></button></td>
             <td className="px-4 py-3.5">{row.sessions.length ? row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">S{session.number} {session.schedule}</p>) : <span className="text-neutral-400">No shift</span>}</td>
             <td className="px-4 py-3.5">{row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">{session.checkIn ? formatTime(session.checkIn) : <span className={`font-medium ${session.scanState === "Absent" ? "text-rose-700" : session.scanState === "Check-in open" ? "text-amber-700" : "text-sky-700"}`}>{session.scanState}</span>}{session.earlyCheckIn > 0 ? <span className="ml-1 text-[10px] font-medium text-sky-700">Early {session.earlyCheckIn}m</span> : session.lateMinutes > 0 ? <span className="ml-1 text-[10px] font-medium text-amber-700">Late {session.lateMinutes}m</span> : null}</p>)}</td>
             <td className="px-4 py-3.5">{row.sessions.map(session => <p key={session.number} className="py-0.5 tabular-nums">{session.checkOut ? formatTime(session.checkOut) : <span className={`font-medium ${session.checkoutState === "Checkout window open" ? "text-amber-700" : session.checkoutState === "No check-out" ? "text-orange-700" : "text-neutral-500"}`}>{session.checkoutState ?? "—"}</span>}{session.earlyCheckOut > 0 ? <span className="ml-1 text-[10px] font-medium text-orange-700">Left early {session.earlyCheckOut}m</span> : null}</p>)}</td>
@@ -482,12 +493,12 @@ export function AttendanceDashboard() {
       {loading ? <Loading /> : pagedAttendanceRows.length === 0 ? <div className="p-10 text-center text-sm text-neutral-500">No attendance records match these filters.</div> : <>
         <div className="divide-y divide-neutral-100 md:hidden">
           {pagedAttendanceRows.map(row => <button key={row.key} type="button" onClick={() => setSelected(row.person)} className="w-full px-4 py-3.5 text-left transition hover:bg-neutral-50">
-            <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold">{row.person.full_name}</p><p className="mt-0.5 truncate text-[11px] text-neutral-500">{row.person.staff_code} · Shift {row.shiftNumber} · {new Date(`${row.date}T00:00:00Z`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(rowAttendanceState(row, nowMs))}`}>{rowAttendanceState(row, nowMs)}</span></div>
+            <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold">{row.person.full_name}</p><p className="mt-0.5 truncate text-[11px] text-neutral-500">{row.person.staff_code}{row.person.department ? ` · ${row.person.department}` : ""} · Shift {row.shiftNumber} ({row.schedule}) · {new Date(`${row.date}T00:00:00Z`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(rowAttendanceState(row, nowMs))}`}>{rowAttendanceState(row, nowMs)}</span></div>
             <div className="mt-2 grid grid-cols-2 gap-3 text-xs"><p><span className="text-[10px] uppercase tracking-wide text-neutral-400">In </span><span className="font-medium tabular-nums">{formatTime(row.checkIn)}</span>{recordTiming(row).earlyCheckIn > 0 ? <span className="ml-1 block text-[10px] font-medium text-sky-700">Early {recordTiming(row).earlyCheckIn}m</span> : row.lateMinutes > 0 ? <span className="ml-1 block text-[10px] font-medium text-amber-700">Late {row.lateMinutes}m</span> : null}</p><p><span className="text-[10px] uppercase tracking-wide text-neutral-400">Out </span><span className="font-medium tabular-nums">{formatTime(row.checkOut)}</span>{recordTiming(row).earlyCheckOut > 0 && <span className="ml-1 block text-[10px] font-medium text-orange-700">Left early {recordTiming(row).earlyCheckOut}m</span>}</p></div>
             {row.lateMinutes > 0 && <p className="mt-1 text-[10px] font-medium text-amber-700">{row.lateMinutes} minutes late</p>}
           </button>)}
         </div>
-        <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[980px] text-left text-xs"><thead className="bg-neutral-50 text-[10px] uppercase tracking-wide text-neutral-400"><tr>{["Date", "Staff", "Branch", "Shift", "Check-in", "Check-out", "Status", "Late", "Source"].map(label => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead><tbody className="divide-y divide-neutral-100">{pagedAttendanceRows.map(row => <tr key={row.key} tabIndex={0} role="button" onClick={() => setSelected(row.person)} onKeyDown={event => { if (event.key === "Enter") setSelected(row.person); }} className="cursor-pointer transition hover:bg-neutral-50"><td className="whitespace-nowrap px-4 py-3.5 tabular-nums">{row.date}</td><td className="px-4 py-3.5"><p className="font-medium text-neutral-900">{row.person.full_name}</p><p className="mt-0.5 text-[10px] text-neutral-400">{row.person.staff_code}</p></td><td className="max-w-40 truncate px-4 py-3.5">{branches.find(item => item.id === row.person.branch_id)?.name ?? "-"}</td><td className="px-4 py-3.5">Shift {row.shiftNumber}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkIn)}{recordTiming(row).earlyCheckIn > 0 ? <span className="ml-1 text-[10px] font-medium text-sky-700">Early {recordTiming(row).earlyCheckIn}m</span> : null}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkOut)}{recordTiming(row).earlyCheckOut > 0 ? <span className="ml-1 text-[10px] font-medium text-orange-700">Left early {recordTiming(row).earlyCheckOut}m</span> : null}</td><td className="px-4 py-3.5"><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(rowAttendanceState(row, nowMs))}`}>{rowAttendanceState(row, nowMs)}</span></td><td className="px-4 py-3.5">{row.lateMinutes ? `${row.lateMinutes} min` : "-"}</td><td className="px-4 py-3.5 capitalize">{row.source}</td></tr>)}</tbody></table></div>
+        <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[1060px] text-left text-xs"><thead className="bg-neutral-50 text-[10px] uppercase tracking-wide text-neutral-400"><tr>{["Date", "Staff", "Department", "Branch", "Shift / schedule", "Check-in", "Check-out", "Status", "Late", "Source"].map(label => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr></thead><tbody className="divide-y divide-neutral-100">{pagedAttendanceRows.map(row => <tr key={row.key} tabIndex={0} role="button" onClick={() => setSelected(row.person)} onKeyDown={event => { if (event.key === "Enter") setSelected(row.person); }} className="cursor-pointer transition hover:bg-neutral-50"><td className="whitespace-nowrap px-4 py-3.5 tabular-nums">{row.date}</td><td className="px-4 py-3.5"><p className="font-medium text-neutral-900">{row.person.full_name}</p><p className="mt-0.5 text-[10px] text-neutral-400">{row.person.staff_code}</p></td><td className="px-4 py-3.5">{row.person.department?.trim() || "Unassigned"}</td><td className="max-w-40 truncate px-4 py-3.5">{branches.find(item => item.id === row.person.branch_id)?.name ?? "-"}</td><td className="whitespace-nowrap px-4 py-3.5">Shift {row.shiftNumber} <span className="text-neutral-500">({row.schedule})</span></td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkIn)}{recordTiming(row).earlyCheckIn > 0 ? <span className="ml-1 text-[10px] font-medium text-sky-700">Early {recordTiming(row).earlyCheckIn}m</span> : null}</td><td className="whitespace-nowrap px-4 py-3.5 font-medium tabular-nums">{formatTime(row.checkOut)}{recordTiming(row).earlyCheckOut > 0 ? <span className="ml-1 text-[10px] font-medium text-orange-700">Left early {recordTiming(row).earlyCheckOut}m</span> : null}</td><td className="px-4 py-3.5"><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${attendanceStatusClass(rowAttendanceState(row, nowMs))}`}>{rowAttendanceState(row, nowMs)}</span></td><td className="px-4 py-3.5">{row.lateMinutes ? `${row.lateMinutes} min` : "-"}</td><td className="px-4 py-3.5 capitalize">{row.source}</td></tr>)}</tbody></table></div>
         <div className="flex flex-col gap-2 border-t border-neutral-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-[11px] text-neutral-500">Showing {Math.min(filteredAttendanceRows.length, (recordPage - 1) * recordsPerPage + 1)}-{Math.min(filteredAttendanceRows.length, recordPage * recordsPerPage)} of {filteredAttendanceRows.length}</p><div className="flex gap-2"><button type="button" onClick={() => setRecordPage(page => Math.max(1, page - 1))} disabled={recordPage <= 1} className="rounded-lg border border-neutral-200 px-3 py-2 text-xs font-medium disabled:opacity-40">Previous</button><span className="self-center px-2 text-xs text-neutral-500">Page {recordPage} of {recordPageCount}</span><button type="button" onClick={() => setRecordPage(page => Math.min(recordPageCount, page + 1))} disabled={recordPage >= recordPageCount} className="rounded-lg border border-neutral-200 px-3 py-2 text-xs font-medium disabled:opacity-40">Next</button></div></div>
       </>}
     </Card>

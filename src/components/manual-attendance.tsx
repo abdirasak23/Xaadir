@@ -7,7 +7,7 @@ import { localDateInTimezone } from "../../shared/attendance-rules";
 type Shift = { start: string; end: string; day?: number };
 type Staff = { id: string; full_name: string; staff_code: string; status: string; shift_start?: string; shift_end?: string; scheduled_shifts?: Shift[] };
 type AttendanceRow = { staff_id: string; shift_number?: number; check_in_at: string | null; check_out_at: string | null; status: string; note?: string | null };
-type RosterStatus = "present" | "absent";
+type RosterStatus = "present" | "absent" | "check_in_only" | "check_out_only";
 const today = localDateInTimezone();
 const weekDayName = (day: number) => ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day];
 const shiftsFor = (person: Staff, day: number): Shift[] => {
@@ -31,8 +31,6 @@ export function ManualAttendance() {
   const [date, setDate] = useState(today);
   const [scope, setScope] = useState<"all_shifts" | "specific_shift">("all_shifts");
   const [shiftNumber, setShiftNumber] = useState(1);
-  const [checkIn, setCheckIn] = useState("");
-  const [checkOut, setCheckOut] = useState("");
   const [draft, setDraft] = useState<Partial<Record<string, RosterStatus>>>({});
   const [timeDraft, setTimeDraft] = useState<Record<string, Record<number, ShiftTimes>>>({});
   const [leaveStaffId, setLeaveStaffId] = useState("");
@@ -90,6 +88,23 @@ export function ManualAttendance() {
     return draft[person.id] ?? savedStatus(person, shifts);
   }
 
+  function markAction(person: Staff, shifts: Shift[], action: RosterStatus) {
+    setDraft(value => ({ ...value, [person.id]: action }));
+    if (scope === "specific_shift") {
+      const saved = records.find(item => item.staff_id === person.id && (item.shift_number ?? 1) === shiftNumber);
+      setTimeDraft(value => ({
+        ...value,
+        [person.id]: {
+          ...value[person.id],
+          [shiftNumber]: value[person.id]?.[shiftNumber] ?? {
+            check_in_at: timeInputValue(saved?.check_in_at),
+            check_out_at: timeInputValue(saved?.check_out_at),
+          },
+        },
+      }));
+    }
+  }
+
   async function saveRoster() {
     setBusy(true); setError(""); setNotice("");
     try {
@@ -101,9 +116,18 @@ export function ManualAttendance() {
         return [{ staff_id: person.id, status, ...(times?.length ? { times } : {}) }];
       });
       if (!entries.length) throw new Error("Mark at least one staff member Present or Absent before saving.");
+      if (scope === "specific_shift") {
+        const missingTimes = entries.find(entry => {
+          const times = entry.times?.find(time => time.shift_number === shiftNumber);
+          return (entry.status === "present" && (!times?.check_in_at || !times?.check_out_at))
+            || (entry.status === "check_in_only" && !times?.check_in_at)
+            || (entry.status === "check_out_only" && !times?.check_out_at);
+        });
+        if (missingTimes) throw new Error("Enter the required actual time for each selected staff shift before saving.");
+      }
       const response = await fetch("/api/attendance", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save-roster", date, scope, shift_number: shiftNumber, check_in_at: checkIn, check_out_at: checkOut, entries }),
+        body: JSON.stringify({ action: "save-roster", date, scope, shift_number: shiftNumber, entries }),
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "Could not save the daily attendance roster.");
@@ -132,10 +156,10 @@ export function ManualAttendance() {
     finally { setBusy(false); }
   }
 
-  const markedPresent = roster.filter(({ person }) => draft[person.id] === "present").length;
+  const markedPresent = roster.filter(({ person }) => ["present", "check_in_only", "check_out_only"].includes(draft[person.id] ?? "")).length;
   const markedAbsent = roster.filter(({ person }) => draft[person.id] === "absent").length;
   const excludedCount = roster.filter(({ person, shifts }) => ["leave", "sick", "holiday"].includes(statusFor(person, shifts))).length;
-  const pendingCount = roster.length - markedPresent - markedAbsent - excludedCount;
+  const pendingCount = roster.length - Object.keys(draft).length - excludedCount;
   const maxShift = Math.max(1, ...staff.map(person => shiftsFor(person, dayNumber).length));
 
   return <>
@@ -156,11 +180,7 @@ export function ManualAttendance() {
           <Field label="Record scope"><select value={scope} onChange={event => { setScope(event.target.value as typeof scope); setDraft({}); setTimeDraft({}); }} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm"><option value="all_shifts">Full day: all scheduled shifts</option><option value="specific_shift">Specific shift: team correction</option></select></Field>
           {scope === "specific_shift" ? <Field label="Shift number"><select value={shiftNumber} onChange={event => { setShiftNumber(Number(event.target.value)); setDraft({}); setTimeDraft({}); }} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm">{Array.from({ length: maxShift }, (_, index) => <option key={index} value={index + 1}>Shift {index + 1}</option>)}</select></Field> : <div className="flex items-end"><p className="rounded-xl bg-emerald-50 px-3.5 py-3 text-xs leading-5 text-emerald-800">Full day applies Present or Absent to every scheduled shift. Present uses each shift&apos;s scheduled check-in and checkout times unless you set individual times below.</p></div>}
         </div>
-        {scope === "specific_shift" && <div className="mt-3 grid gap-3 rounded-xl bg-neutral-50 p-3 sm:grid-cols-2 sm:p-4">
-          <Field label="Check-in time (optional)"><Input type="time" value={checkIn} onChange={event => setCheckIn(event.target.value)} /></Field>
-          <Field label="Check-out time (optional)"><Input type="time" value={checkOut} onChange={event => setCheckOut(event.target.value)} /></Field>
-          <p className="text-[11px] leading-5 text-neutral-500 sm:col-span-2">Selected times apply to this shift for everyone marked Present. Leave them blank to use each staff member&apos;s scheduled times. Overnight checkout is saved on the following date.</p>
-        </div>}
+        {scope === "specific_shift" && <p className="mt-3 rounded-xl bg-sky-50 px-3.5 py-3 text-xs leading-5 text-sky-800">For each person, record check-in only, checkout only, the complete shift, or absence. Enter the actual time for the action you choose; other shifts remain unchanged.</p>}
         <div className="mt-4 grid grid-cols-3 gap-2 sm:max-w-lg">
           <div className="rounded-xl bg-emerald-50 p-3"><p className="text-[10px] font-medium text-emerald-700">Present</p><p className="mt-1 text-xl font-semibold text-emerald-900">{markedPresent}</p></div>
           <div className="rounded-xl bg-rose-50 p-3"><p className="text-[10px] font-medium text-rose-700">Absent</p><p className="mt-1 text-xl font-semibold text-rose-900">{markedAbsent}</p></div>
@@ -175,11 +195,13 @@ export function ManualAttendance() {
           const special = current === "leave" || current === "sick" || current === "holiday";
           return <div key={person.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <div className="min-w-0"><p className="truncate text-sm font-semibold">{person.full_name}</p><p className="mt-0.5 text-[11px] text-neutral-500">{person.staff_code} <span className="mx-1 text-neutral-300"> - </span> {shiftLabel}</p>{current === "mixed" && <p className="mt-1 text-[10px] font-medium text-amber-700">Mixed shift records  -  choose one status to correct this scope</p>}{special && <p className="mt-1 text-[10px] font-medium capitalize text-violet-700">Already recorded as {current}; resolve that entry before changing attendance</p>}</div>
-            <div className="grid grid-cols-2 gap-2 sm:w-56">
-              <button type="button" disabled={special} aria-pressed={current === "present"} onClick={() => setDraft(value => ({ ...value, [person.id]: "present" }))} className={`min-h-11 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${current === "present" ? "border-emerald-600 bg-emerald-600 text-white" : "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50"} disabled:cursor-not-allowed disabled:opacity-40`}>Present</button>
-              <button type="button" disabled={special} aria-pressed={current === "absent"} onClick={() => setDraft(value => ({ ...value, [person.id]: "absent" }))} className={`min-h-11 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${current === "absent" ? "border-rose-600 bg-rose-600 text-white" : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"} disabled:cursor-not-allowed disabled:opacity-40`}>Absent</button>
-            </div>
-            {!special && <div className="sm:ml-auto sm:w-56">
+            {scope === "all_shifts" ? <div className="grid grid-cols-2 gap-2 sm:w-56">
+              <button type="button" disabled={special} aria-pressed={current === "present"} onClick={() => markAction(person, shifts, "present")} className={`min-h-11 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${current === "present" ? "border-emerald-600 bg-emerald-600 text-white" : "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50"} disabled:cursor-not-allowed disabled:opacity-40`}>Present all</button>
+              <button type="button" disabled={special} aria-pressed={current === "absent"} onClick={() => markAction(person, shifts, "absent")} className={`min-h-11 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${current === "absent" ? "border-rose-600 bg-rose-600 text-white" : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"} disabled:cursor-not-allowed disabled:opacity-40`}>Absent all</button>
+            </div> : <div className="grid grid-cols-2 gap-2 sm:w-[22rem]">
+              {([["check_in_only", "Check in"], ["check_out_only", "Check out"], ["present", "Full shift"], ["absent", "Absent"]] as const).map(([action, label]) => <button key={action} type="button" disabled={special} aria-pressed={current === action} onClick={() => markAction(person, shifts, action)} className={`min-h-10 rounded-xl border px-3 py-2 text-xs font-semibold transition ${current === action ? action === "absent" ? "border-rose-600 bg-rose-600 text-white" : "border-emerald-600 bg-emerald-600 text-white" : action === "absent" ? "border-rose-200 bg-white text-rose-700 hover:bg-rose-50" : "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50"} disabled:cursor-not-allowed disabled:opacity-40`}>{label}</button>)}
+            </div>}
+            {!special && scope === "all_shifts" && <div className="sm:ml-auto sm:w-56">
               <button type="button" onClick={() => {
                 if (timeDraft[person.id]) {
                   setTimeDraft(value => { const next = { ...value }; delete next[person.id]; return next; });
@@ -200,6 +222,11 @@ export function ManualAttendance() {
                 </div>)}
                 <p className="text-[10px] leading-4 text-neutral-500">These times apply only to this staff member. Overnight checkout is saved on the following date.</p>
               </div>}
+            </div>}
+            {!special && scope === "specific_shift" && ["present", "check_in_only", "check_out_only"].includes(current) && timeDraft[person.id]?.[shiftNumber] && <div className="grid gap-2 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3 sm:ml-auto sm:w-[24rem] sm:grid-cols-2">
+              {(current === "present" || current === "check_in_only") && <label className="text-[11px] font-medium text-neutral-600">Actual check-in<input required type="time" value={timeDraft[person.id][shiftNumber].check_in_at} onChange={event => setTimeDraft(value => ({ ...value, [person.id]: { ...value[person.id], [shiftNumber]: { ...value[person.id][shiftNumber], check_in_at: event.target.value } } }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-neutral-900" /></label>}
+              {(current === "present" || current === "check_out_only") && <label className="text-[11px] font-medium text-neutral-600">Actual check-out<input required type="time" value={timeDraft[person.id][shiftNumber].check_out_at} onChange={event => setTimeDraft(value => ({ ...value, [person.id]: { ...value[person.id], [shiftNumber]: { ...value[person.id][shiftNumber], check_out_at: event.target.value } } }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-neutral-900" /></label>}
+              <p className="text-[10px] leading-4 text-neutral-500 sm:col-span-2">Only this staff member&apos;s selected shift is changed. Overnight checkout is recorded on the next date.</p>
             </div>}
           </div>;
         })}

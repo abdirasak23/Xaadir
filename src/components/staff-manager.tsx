@@ -7,7 +7,7 @@ import { Add01Icon, Cancel01Icon, SmartphoneIcon, RefreshIcon } from "@hugeicons
 
 type Branch = { id: string; name: string };
 type Shift = { start: string; end: string; day?: number };
-type Staff = { id: string; full_name: string; staff_code: string; phone: string; email: string; job_title: string; branch_id: string; shift_start: string; shift_end: string; scheduled_shifts?: Shift[]; check_in_method: "biometric" | "selfie"; monthly_salary?: number; annual_leave_days: number; status: string; invite_status: string; branches?: { name: string } };
+type Staff = { id: string; full_name: string; staff_code: string; phone: string; email: string; job_title: string; department?: string | null; branch_id: string; shift_start: string; shift_end: string; scheduled_shifts?: Shift[]; check_in_method: "biometric" | "selfie"; monthly_salary?: number; annual_leave_days: number; status: string; invite_status: string; branches?: { name: string } };
 type LeaveRecord = { id: string; staff_id: string; leave_type: string; start_date: string; end_date: string; status: string; reason: string };
 type HolidayRecord = { date: string; branch_id: string | null };
 type StaffDeviceRequest = { id: string; device_name: string | null; status: "pending" | "approved" | "rejected"; requested_at: string; staff: { id: string; full_name: string; staff_code: string; branch_id: string; branches: { name: string } | null } };
@@ -15,7 +15,7 @@ type StaffRecoveryCode = { code: string; email: string; full_name: string; expir
 const weekDays = [{ day: 1, label: "Monday" }, { day: 2, label: "Tuesday" }, { day: 3, label: "Wednesday" }, { day: 4, label: "Thursday" }, { day: 5, label: "Friday" }, { day: 6, label: "Saturday" }, { day: 0, label: "Sunday" }];
 const defaultShift: Shift = { start: "09:00", end: "17:00" };
 const initialWeek = () => Object.fromEntries(weekDays.map(({ day }) => [day, [{ ...defaultShift }]])) as Record<number, Shift[]>;
-const emptyForm = { full_name: "", staff_code: "", email: "", phone: "", job_title: "", branch_id: "", shift_start: "09:00", shift_end: "17:00", scheduled_shifts: [{ ...defaultShift }], schedule_mode: "same" as "same" | "weekly", weekly_shifts: initialWeek(), check_in_method: "biometric" as "biometric" | "selfie", monthly_salary: 0, annual_leave_days: 21 };
+const emptyForm = { full_name: "", staff_code: "", email: "", phone: "", job_title: "", department: "", branch_id: "", shift_start: "09:00", shift_end: "17:00", scheduled_shifts: [{ ...defaultShift }], schedule_mode: "same" as "same" | "weekly", weekly_shifts: initialWeek(), check_in_method: "biometric" as "biometric" | "selfie", monthly_salary: 0, annual_leave_days: 21 };
 
 function StaffDeviceApprovals() {
   const [requests, setRequests] = useState<StaffDeviceRequest[]>([]);
@@ -142,7 +142,7 @@ export function StaffManager() {
       for (const day of weekDays) weekly_shifts[day.day] = shifts.filter(shift => shift.day === day.day).map(({ start, end }) => ({ start: start.slice(0, 5), end: end.slice(0, 5) }));
     }
     const dailyShifts = isWeekly ? [{ ...defaultShift }] : shifts.map(({ start, end }) => ({ start: start.slice(0, 5), end: end.slice(0, 5) }));
-    setForm({ ...emptyForm, full_name: person.full_name, staff_code: person.staff_code, email: person.email, phone: person.phone, job_title: person.job_title, branch_id: person.branch_id, shift_start: dailyShifts[0].start, shift_end: dailyShifts[dailyShifts.length - 1].end, scheduled_shifts: dailyShifts, schedule_mode: isWeekly ? "weekly" : "same", weekly_shifts, check_in_method: person.check_in_method ?? "biometric", monthly_salary: person.monthly_salary ?? 0, annual_leave_days: person.annual_leave_days ?? 21 });
+    setForm({ ...emptyForm, full_name: person.full_name, staff_code: person.staff_code, email: person.email, phone: person.phone, job_title: person.job_title, department: person.department ?? "", branch_id: person.branch_id, shift_start: dailyShifts[0].start, shift_end: dailyShifts[dailyShifts.length - 1].end, scheduled_shifts: dailyShifts, schedule_mode: isWeekly ? "weekly" : "same", weekly_shifts, check_in_method: person.check_in_method ?? "biometric", monthly_salary: person.monthly_salary ?? 0, annual_leave_days: person.annual_leave_days ?? 21 });
     setFormError("");
     setFormOpen(true);
   }
@@ -207,6 +207,7 @@ export function StaffManager() {
           <div className="grid grid-cols-2 gap-3"><Field label="Staff code"><Input required placeholder="e.g. stf-9908" value={form.staff_code} onChange={event => setForm({ ...form, staff_code: event.target.value })} /></Field><Field label="Phone"><Input required value={form.phone} onChange={event => setForm({ ...form, phone: event.target.value })} /></Field></div>
           <Field label="Personal email"><Input type="email" required value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} /></Field>
           <Field label="Job title"><Input required value={form.job_title} onChange={event => setForm({ ...form, job_title: event.target.value })} /></Field>
+          <Field label="Department"><Input placeholder="e.g. Nursing, Finance, Security" value={form.department} onChange={event => setForm({ ...form, department: event.target.value })} /><span className="mt-1 block text-[11px] text-neutral-500">Used to filter attendance by department.</span></Field>
           <Field label="Branch"><select required value={form.branch_id} onChange={event => setForm({ ...form, branch_id: event.target.value })} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-forest"><option value="" disabled>Select a branch</option>{branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></Field>
           <Field label="Check-in method"><select value={form.check_in_method} onChange={event => setForm({ ...form, check_in_method: event.target.value as "biometric" | "selfie" })} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-forest"><option value="biometric">Fingerprint / face recognition</option><option value="selfie">Selfie</option></select><span className="mt-1 block text-[11px] text-neutral-500">Choose the verification method this staff member should use in the mobile app.</span></Field>
           <Field label="Monthly salary"><Input type="number" min="0" step="0.01" required value={form.monthly_salary} onChange={event => setForm({ ...form, monthly_salary: Number(event.target.value) })} /><span className="mt-1 block text-[11px] text-neutral-500">Base monthly pay used for late and unexcused absence deductions.</span></Field>

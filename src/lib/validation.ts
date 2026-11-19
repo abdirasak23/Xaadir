@@ -25,6 +25,7 @@ export const staffSchema = z.object({
   email: z.string().trim().email().max(254),
   phone: z.string().trim().min(6).max(30),
   job_title: z.string().trim().min(1).max(100),
+  department: z.string().trim().max(100).optional().default(""),
   branch_id: uuidSchema,
   shift_start: timeSchema,
   shift_end: timeSchema,

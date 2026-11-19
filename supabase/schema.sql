@@ -50,6 +50,7 @@ create table if not exists public.staff (
   phone text not null,
   email text not null unique,
   job_title text not null,
+  department text not null default '',
   branch_id uuid not null references public.branches(id),
   shift_start time not null,
   shift_end time not null,

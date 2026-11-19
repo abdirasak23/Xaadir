@@ -51,17 +51,20 @@ function calculatePayroll(data: PayrollData, person: Staff): PayrollSummary {
   const today = localDateInTimezone();
   const workDatesSoFar = monthDates.filter(date => date < today && isWorkday(date) && !holidays.has(date) && getShifts(person, date).length > 0);
   const records = data.attendance.filter(item => item.staff_id === person.id);
-  const presentDates = new Set(records.filter(item => ["present", "late", "manual"].includes(item.status)).map(item => item.date));
+  // A status flag alone is not proof of attendance. Older/manual rows can carry
+  // `present` while both timestamps are empty; do not count those as attended.
+  const attended = (item: Attendance) => ["present", "late", "manual"].includes(item.status) && Boolean(item.check_in_at);
+  const presentDates = new Set(records.filter(attended).map(item => item.date));
   const leaveDates = new Set(records.filter(item => ["leave", "sick", "holiday"].includes(item.status)).map(item => item.date));
   const eligiblePastDates = workDatesSoFar.filter(date => !isOnLeave(date) && !leaveDates.has(date));
   const absentDates = eligiblePastDates.filter(date => !presentDates.has(date));
   const attendanceDays = eligiblePastDates.filter(date => presentDates.has(date)).length;
   const attendancePercentage = eligiblePastDates.length ? Math.round(attendanceDays / eligiblePastDates.length * 100) : null;
-  const lateMinutes = records.reduce((sum, record) => sum + lateAfterGrace(record, person), 0);
+  const lateMinutes = records.reduce((sum, record) => sum + (attended(record) ? lateAfterGrace(record, person) : 0), 0);
   const salary = Number(person.monthly_salary ?? 0);
   const dailySalary = payableDays > 0 ? salary / payableDays : 0;
   const rateForDate = (date: string) => { const hours = getShifts(person, date).reduce((sum, shift) => sum + shiftMinutes(shift) / 60, 0); return hours > 0 ? salary / Math.max(payableDays, 1) / hours / 60 : 0; };
-  const lateDeduction = records.reduce((sum, record) => sum + lateAfterGrace(record, person) * rateForDate(record.date), 0);
+  const lateDeduction = records.reduce((sum, record) => sum + (attended(record) ? lateAfterGrace(record, person) * rateForDate(record.date) : 0), 0);
   const absenceDeduction = dailySalary * absentDates.length;
   const net = Math.max(0, salary - lateDeduction - absenceDeduction);
   const rows: HistoryRow[] = records.map(record => {
@@ -71,10 +74,49 @@ function calculatePayroll(data: PayrollData, person: Staff): PayrollSummary {
     const shift = shifts[record.shift_number - 1];
     const leaveRecord = approvedLeave.find(item => item.start_date <= record.date && item.end_date >= record.date);
     const holiday = data.holidays.find(item => item.date === record.date && (item.branch_id === null || item.branch_id === person.branch_id));
-    const status = record.status === "leave" ? (leaveRecord?.leave_type ?? "leave") : record.status === "holiday" ? "holiday" : record.status;
-    return { date: record.date, shift: shift ? `${shift.start}-${shift.end}` : `Shift ${record.shift_number}`, checkIn: displayTime(record.check_in_at), checkOut: displayTime(record.check_out_at), status, late, deduction: dailyHours > 0 ? perMin * late : 0, note: record.note ?? holiday?.name ?? leaveRecord?.reason ?? (record.source === "manual" ? "Manual entry" : "") };
+    let status = record.status === "leave" ? (leaveRecord?.leave_type ?? "leave") : record.status === "holiday" ? "holiday" : record.status;
+    let note = record.note ?? holiday?.name ?? leaveRecord?.reason ?? (record.source === "manual" ? "Manual entry" : "");
+    if (["present", "late", "manual"].includes(record.status) && !record.check_in_at) {
+      status = record.date < today ? "unexcused absence" : "not checked in";
+      note = "Attendance status has no check-in time";
+    } else if (attended(record) && !record.check_out_at && record.date < today && status !== "late") {
+      status = "checkout missing";
+      note = note || "Check-in recorded; no check-out time";
+    }
+    return { date: record.date, shift: shift ? `${shift.start}-${shift.end}` : `Shift ${record.shift_number}`, checkIn: displayTime(record.check_in_at), checkOut: displayTime(record.check_out_at), status, late: attended(record) ? late : 0, deduction: attended(record) && dailyHours > 0 ? perMin * late : 0, note };
   });
-  for (const date of absentDates) rows.push({ date, shift: "All shifts", checkIn: "—", checkOut: "—", status: "unexcused absence", late: 0, deduction: dailySalary, note: "No attendance or approved leave recorded" });
+  // Fill in each scheduled shift for completed workdays so a missing shift is
+  // visible in the statement. The daily absence deduction is applied once per
+  // fully absent day, matching the payroll policy.
+  const recorded = new Map(records.map(record => [`${record.date}|${record.shift_number || 1}`, record]));
+  const absentSet = new Set(absentDates);
+  for (const date of eligiblePastDates) {
+    const shifts = getShifts(person, date);
+    shifts.forEach((shift, index) => {
+      const key = `${date}|${index + 1}`;
+      if (recorded.has(key)) return;
+      const leave = approvedLeave.find(item => item.start_date <= date && item.end_date >= date);
+      const holiday = data.holidays.find(item => item.date === date && (item.branch_id === null || item.branch_id === person.branch_id));
+      const excused = leave || leaveDates.has(date) || holiday || holidays.has(date);
+      rows.push({
+        date, shift: `${shift.start}-${shift.end}`, checkIn: "—", checkOut: "—",
+        status: excused ? (holiday || holidays.has(date) ? "holiday" : leave?.leave_type ?? "leave") : absentSet.has(date) ? "unexcused absence" : "no check-in",
+        late: 0, deduction: absentSet.has(date) && index === 0 ? dailySalary : 0,
+        note: excused ? (holiday?.name ?? leave?.reason ?? "Approved time off") : absentSet.has(date) ? "No check-in recorded for this scheduled shift" : "No check-in recorded; another shift was attended",
+      });
+    });
+  }
+  // Put a whole-day absence deduction on that day's first scheduled shift even
+  // when an explicit `absent` row already exists for the shift.
+  for (const date of absentDates) {
+    const firstShift = getShifts(person, date)[0];
+    if (!firstShift) continue;
+    const firstRow = rows.find(row => row.date === date && row.shift === `${firstShift.start}-${firstShift.end}`);
+    if (firstRow) {
+      firstRow.status = "unexcused absence";
+      firstRow.deduction = dailySalary;
+    }
+  }
   rows.sort((a, b) => a.date.localeCompare(b.date) || a.shift.localeCompare(b.shift));
   return { salary, dailyHours, payableDays, expectedDays: eligiblePastDates.length, attendanceDays, attendancePercentage, lateMinutes, lateDeduction, absenceDeduction, absentDays: absentDates.length, net, rows, shifts: getShifts(person) };
 }
@@ -152,42 +194,7 @@ export function PayrollManager() {
   useEffect(() => { void load(); }, [load]);
 
   const person = data?.staff.find(item => item.id === staffId) ?? null;
-  const result = useMemo(() => {
-    if (!data || !person) return null;
-    const monthDates = daysBetween(data.from, data.to);
-    const holidays = new Set(data.holidays.filter(item => item.branch_id === null || item.branch_id === person.branch_id).map(item => item.date));
-    const approvedLeave = data.leaves.filter(item => item.staff_id === person.id);
-    const isOnLeave = (date: string) => approvedLeave.some(item => item.start_date <= date && item.end_date >= date);
-    const scheduledDates = monthDates.filter(date => isWorkday(date) && getShifts(person, date).length > 0);
-    const dailyHours = scheduledDates.length ? scheduledDates.reduce((sum, date) => sum + getShifts(person, date).reduce((day, shift) => day + shiftMinutes(shift) / 60, 0), 0) / scheduledDates.length : 0;
-    const payableDays = scheduledDates.filter(date => !holidays.has(date)).length;
-    const today = localDateInTimezone();
-    const workDatesSoFar = monthDates.filter(date => date < today && isWorkday(date) && !holidays.has(date) && getShifts(person, date).length > 0);
-    const records = data.attendance.filter(item => item.staff_id === person.id);
-    const presentDates = new Set(records.filter(item => ["present", "late", "manual"].includes(item.status)).map(item => item.date));
-    const leaveDates = new Set(records.filter(item => ["leave", "sick", "holiday"].includes(item.status)).map(item => item.date));
-    const absentDates = workDatesSoFar.filter(date => !presentDates.has(date) && !leaveDates.has(date) && !isOnLeave(date));
-    const lateMinutes = records.reduce((sum, record) => sum + lateAfterGrace(record, person), 0);
-    const salary = Number(person.monthly_salary ?? 0);
-    const dailySalary = payableDays > 0 ? salary / payableDays : 0;
-    const rateForDate = (date: string) => { const hours = getShifts(person, date).reduce((sum, shift) => sum + shiftMinutes(shift) / 60, 0); return hours > 0 ? salary / Math.max(payableDays, 1) / hours / 60 : 0; };
-    const lateDeduction = records.reduce((sum, record) => sum + lateAfterGrace(record, person) * rateForDate(record.date), 0);
-    const absenceDeduction = dailySalary * absentDates.length;
-    const net = Math.max(0, salary - lateDeduction - absenceDeduction);
-    const rows: HistoryRow[] = records.map(record => {
-      const shifts = getShifts(person, record.date);
-      const late = lateAfterGrace(record, person);
-      const perMin = rateForDate(record.date);
-      const grace = shifts[record.shift_number - 1];
-      const leaveRecord = approvedLeave.find(item => item.start_date <= record.date && item.end_date >= record.date);
-      const holiday = data.holidays.find(item => item.date === record.date && (item.branch_id === null || item.branch_id === person.branch_id));
-      const status = record.status === "leave" ? (leaveRecord?.leave_type ?? "leave") : record.status === "holiday" ? "holiday" : record.status;
-      return { date: record.date, shift: grace ? `${grace.start}–${grace.end}` : `Shift ${record.shift_number}`, checkIn: displayTime(record.check_in_at), checkOut: displayTime(record.check_out_at), status, late, deduction: perMin * late, note: record.note ?? holiday?.name ?? leaveRecord?.reason ?? (record.source === "manual" ? "Manual entry" : "") };
-    });
-    for (const date of absentDates) rows.push({ date, shift: "All shifts", checkIn: "—", checkOut: "—", status: "unexcused absence", late: 0, deduction: dailySalary, note: "No attendance or approved leave recorded" });
-    rows.sort((a, b) => a.date.localeCompare(b.date) || a.shift.localeCompare(b.shift));
-    return { salary, dailyHours, payableDays, lateMinutes, lateDeduction, absenceDeduction, absentDays: absentDates.length, net, rows, shifts: getShifts(person) };
-  }, [data, person]);
+  const result = useMemo(() => data && person ? calculatePayroll(data, person) : null, [data, person]);
 
   const summary = result && { salary: result.salary, lateDeduction: result.lateDeduction, absenceDeduction: result.absenceDeduction, net: result.net, lateMinutes: result.lateMinutes, absentDays: result.absentDays };
   const roster = useMemo(() => (data?.staff ?? []).map(item => ({ person: item, payroll: data ? calculatePayroll(data, item) : null })), [data]);
