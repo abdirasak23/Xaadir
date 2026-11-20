@@ -6,6 +6,12 @@ import { localDateInTimezone, TIMEZONE } from "../../../../shared/attendance-rul
 
 const jsonError = (message: string, status = 400) => NextResponse.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
 function pageValue(value: string | null) { const page = Number(value ?? 1); return Number.isInteger(page) && page > 0 ? Math.min(page, 10000) : 1; }
+type ScheduledShift = { start: string; end: string; day?: number };
+function isScheduledShift(value: unknown): value is ScheduledShift {
+  if (!value || typeof value !== "object") return false;
+  const shift = value as Record<string, unknown>;
+  return typeof shift.start === "string" && typeof shift.end === "string" && (shift.day === undefined || Number.isInteger(shift.day));
+}
 
 export async function GET(request: NextRequest) {
   const company = await getCompanyContext(); if (!company) return jsonError("Company login required.", 401);
@@ -47,11 +53,11 @@ export async function GET(request: NextRequest) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < start || (new Date(`${end}T00:00:00Z`).getTime() - new Date(`${start}T00:00:00Z`).getTime()) / 86400000 > 366) return jsonError("Choose a valid attendance range.");
     const { data, error } = await db.from("attendance").select("id,date,shift_number,status,check_in_at,check_out_at,late_minutes,note").eq("staff_id", staffId).gte("date", start).lte("date", end).order("date", { ascending: false }).order("shift_number");
     if (error) return jsonError("Could not load attendance entries.", 500);
-    const configured = Array.isArray(person.scheduled_shifts) ? person.scheduled_shifts : [];
-    const weekly = configured.some((shift: any) => Number.isInteger(shift?.day));
+    const configured: ScheduledShift[] = Array.isArray(person.scheduled_shifts) ? person.scheduled_shifts.filter(isScheduledShift) : [];
+    const weekly = configured.some(shift => Number.isInteger(shift.day));
     const attendance = (data ?? []).map(row => {
       const day = new Date(`${row.date}T00:00:00Z`).getUTCDay();
-      const shifts = configured.filter((shift: any) => !weekly || shift?.day === day);
+      const shifts = configured.filter(shift => !weekly || shift.day === day);
       const schedule = shifts[(row.shift_number ?? 1) - 1] ?? (!configured.length ? { start: person.shift_start, end: person.shift_end } : null);
       const endMinute = schedule?.end ? Number(schedule.end.slice(0, 2)) * 60 + Number(schedule.end.slice(3, 5)) : null;
       const stamp = row.check_out_at ? Date.parse(row.check_out_at) : NaN;
@@ -108,11 +114,11 @@ export async function POST(request: NextRequest) {
   const actor = company.email?.trim().toLowerCase() || company.fullName;
   try {
     if (body.action === "report") {
-      const { action: _action, ...reportBody } = body;
+      const reportBody = Object.fromEntries(Object.entries(body).filter(([key]) => key !== "action"));
       const result = await callAdminFunction("report-data", { ...reportBody, company_id: company.companyId, actor, record_export: false });
       return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
     }
-    if (body.action === "save") { const { action: _action, ...noteBody } = body; return NextResponse.json(await callAdminFunction("note-save", { ...noteBody, company_id: company.companyId, actor }), { status: body.id ? 200 : 201 }); }
+    if (body.action === "save") { const noteBody = Object.fromEntries(Object.entries(body).filter(([key]) => key !== "action")); return NextResponse.json(await callAdminFunction("note-save", { ...noteBody, company_id: company.companyId, actor }), { status: body.id ? 200 : 201 }); }
     if (body.action === "delete") return NextResponse.json(await callAdminFunction("note-delete", { note_id: body.note_id, company_id: company.companyId, actor }));
     if (body.action === "lock") return NextResponse.json(await callAdminFunction("note-lock", { note_id: body.note_id, company_id: company.companyId, actor }));
     if (body.action === "link") return NextResponse.json(await callAdminFunction("note-link", { company_id: company.companyId, actor, note_id: body.note_id, attendance_id: body.attendance_id, action: body.operation }));
