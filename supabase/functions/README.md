@@ -18,6 +18,12 @@ supabase functions deploy qr-token
 supabase functions deploy manual-attendance
 supabase functions deploy checkin
 supabase functions deploy password-recovery
+supabase functions deploy note-save
+supabase functions deploy note-delete
+supabase functions deploy note-lock
+supabase functions deploy note-link
+supabase functions deploy note-file-sign
+supabase functions deploy report-data
 ```
 
 The admin functions require the `x-admin-secret` header. `qr-token` is public but requires the branch's live QR key in its request body. `checkin` is intended for the Flutter app and authenticates the staff access token itself.

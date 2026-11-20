@@ -81,6 +81,17 @@ The Worker is named `xaadir`; `wrangler.jsonc` configures its OpenNext entry poi
 6. Scan a QR code on a leave day and confirm that the check-in function returns HTTP 403 with `ON_LEAVE`. Cancel the request, then confirm check-in is available again.
 7. Convert a past absent day to sick leave from the attendance detail, and confirm the status and percentage update. Add a holiday and confirm active staff in its scope receive holiday entries, while existing check-ins remain untouched.
 
+## HR Notes & Reports
+
+1. Run [`supabase/hr_notes.sql`](./supabase/hr_notes.sql) in the Supabase SQL Editor. It creates the private notes, version, attendance-link, attachment, and report-export tables; enables RLS without client policies; grants database access only to `service_role`; and creates the private `hr-notes` bucket (5 MB, JPG/PNG/PDF). HR author identity is stored as the signed-in company login email so lock overrides are tied to a specific account.
+2. Deploy these standalone Supabase Edge Functions: `note-save`, `note-delete`, `note-lock`, `note-link`, `note-file-sign`, and `report-data`. Set `EDGE_FUNCTION_SECRET` in Supabase to the same value used by the Next.js server. Each function checks `x-admin-secret`; the browser calls authenticated Next.js routes and never receives that secret.
+3. Open **HR Notes** in the company sidebar. Notes are private to the HR panel regardless of the visibility label; no staff-facing function returns note data. Follow-up and timeline lists use pages of 20 or 25 items.
+4. Create a note for a staff member dated today and confirm it appears in Today, Recent notes, and the staff timeline. Add a follow-up for yesterday; verify it appears as overdue and Resolve removes it from the due list.
+5. Edit the note and confirm the old title, type, and body appear in View history and the current note has an Edited badge. Lock a warning; verify edits require the original author to check the explicit override control.
+6. Link a late or absent attendance row and attach an allowed JPG, PNG, or PDF under 5 MB. Confirm the attachment opens through a short-lived signed URL and the bucket remains private.
+7. Build a staff, selected-staff, single-day, and all-staff report. Confirm date range filters, attendance summary fields, notes, PDF page numbers, confidential footer, and export history. All-staff PDFs include a cover summary and begin each staff section on a new page.
+8. Confirm a staff access token cannot read any `hr_notes`, version, link, file, or export table; those tables have RLS enabled and no policies for `anon` or `authenticated`.
+
 ## Split shifts and payroll
 
 1. Run [`supabase/payroll.sql`](./supabase/payroll.sql) in the Supabase SQL Editor after `schema.sql` and `leave.sql`. It migrates existing staff to their current single shift, adds salary and schedule fields, changes attendance to one row per staff shift, and sets the lateness grace period to five minutes.

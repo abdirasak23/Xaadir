@@ -320,7 +320,11 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
   let lateDed = 0;
   for (const record of records) {
     const sched = dateShifts(record.date);
-    const shift = sched[Math.max(0, (record.shift_number ?? 1) - 1)];
+    const shiftIndex = (record.shift_number ?? 1) - 1;
+    const shift = sched[shiftIndex];
+    // Ignore orphaned attendance rows that point to a shift not scheduled
+    // that date. They must not turn a one-shift absence into attendance.
+    if (!shift) continue;
     const late = panelLateMinutes(record, shift);
     lateByShift.set(`${record.date}|${record.shift_number ?? 1}`, late);
     const dailyMinutes = sched.reduce((sum, item) => sum + shiftLength(item), 0);
@@ -330,6 +334,7 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
   }
   let absDed = 0;
   let absentDays = 0;
+  let absentShifts = 0;
   let expectedDays = 0;
   let attendanceDays = 0;
   let elapsed = 0;
@@ -346,7 +351,10 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
 
     const leave = leaveOn(date);
     const dateRecords = records.filter((record) => record.date === date);
-    const presentToday = dateRecords.some((record) => ["present", "late", "manual"].includes(record.status));
+    const presentToday = dateRecords.some((record) => {
+      const shiftIndex = (record.shift_number ?? 1) - 1;
+      return Boolean(sched[shiftIndex]) && ["present", "late", "manual"].includes(record.status) && Boolean(record.check_in_at);
+    });
     const excusedToday = dateRecords.some((record) => ["leave", "sick", "holiday"].includes(record.status)) || Boolean(leave);
     const eligiblePast = !holidayName && sched.length > 0 && date < today && !excusedToday;
     if (eligiblePast) {
@@ -398,13 +406,17 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
       rows.push(row);
     }
 
-    if (eligiblePast && !presentToday) {
-      const first = rows[0];
-      if (first) {
-        first.deduction = r2(daily);
-        first.kind = "unexcused";
+    if (eligiblePast) {
+      const dateMinutes = sched.reduce((sum, item) => sum + shiftLength(item), 0);
+      for (const row of rows) {
+        if (row.kind !== "unexcused") continue;
+        absentShifts += 1;
+        const shift = sched.find(item => item.number === row.shift_number);
+        if (!shift || dateMinutes <= 0) continue;
+        const shiftAbsenceDeduction = daily * shiftLength(shift) / dateMinutes;
+        row.deduction = r2(shiftAbsenceDeduction);
+        absDed += shiftAbsenceDeduction;
       }
-      absDed += daily;
     }
     days.push({ date, shifts: rows, holiday: holidayName ?? null, attendance_recorded: presentToday });
   }
@@ -422,6 +434,7 @@ async function computePayroll(staff: StaffRow, monthKey: string, today: string) 
       late_minutes: lateMinutes,
       lateness_deduction: lateDed,
       unexcused_absent_days: absentDays,
+      unexcused_absent_shifts: absentShifts,
       absence_deduction: absDed,
       estimated_net: r2(Math.max(0, salary - lateDed - absDed)),
       daily_salary: r2(daily),

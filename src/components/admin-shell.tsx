@@ -6,7 +6,7 @@ import xaadirLogo from "../../public/images/xaadirlogo.png";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { UserGroupIcon, Calendar03Icon, Edit01Icon, QrCode01Icon, Settings02Icon, Logout01Icon, Menu01Icon, ArrowUpRight01Icon, Money01Icon, WhatsappIcon, Calendar01Icon } from "@hugeicons/core-free-icons";
+import { UserGroupIcon, Calendar03Icon, Edit01Icon, QrCode01Icon, Settings02Icon, Logout01Icon, Menu01Icon, ArrowUpRight01Icon, Money01Icon, WhatsappIcon, Calendar01Icon, Note01Icon } from "@hugeicons/core-free-icons";
 
 const links = [
   { href: "/staff", label: "Staff", icon: UserGroupIcon },
@@ -14,6 +14,7 @@ const links = [
   { href: "/schedule", label: "Schedule", icon: Calendar01Icon },
   { href: "/payroll", label: "Payroll", icon: Money01Icon },
   { href: "/leave", label: "Leave", icon: Calendar03Icon },
+  { href: "/hr-notes", label: "HR Notes", icon: Note01Icon },
   { href: "/attendance/manual", label: "Manual entry", icon: Edit01Icon },
   { href: "/qr-codes", label: "QR codes", icon: QrCode01Icon },
   { href: "/environment", label: "Branches", icon: Settings02Icon },
